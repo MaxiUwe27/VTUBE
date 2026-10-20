@@ -28,6 +28,7 @@ export function viewSection(ctx: AppContext): SectionModule {
     subhead('Kamera'),
     ui.segmented<ViewSettings['framing']>({
       label: 'Ausschnitt',
+      stacked: true,
       options: [
         { value: 'head', label: 'Kopf' },
         { value: 'upperBody', label: 'Oberkörper' },

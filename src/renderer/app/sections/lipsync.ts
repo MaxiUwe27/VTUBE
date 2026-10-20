@@ -6,7 +6,7 @@ import { fmt, hint, iconButton, meter, section, type Opt } from '../controls';
 import { h, toggleClass } from '../dom';
 import { toast } from '../toast';
 
-const VISEMES = ['aa', 'ih', 'ou', 'ee', 'oh'] as const;
+const VISEMES = ['aa', 'ee', 'ih', 'oh', 'ou'] as const; // German vowel order A E I O U
 const VISEME_LABEL: Record<(typeof VISEMES)[number], string> = { aa: 'A', ih: 'I', ou: 'U', ee: 'E', oh: 'O' };
 
 export function lipSyncSection(ctx: AppContext): SectionModule {
@@ -81,7 +81,7 @@ export function lipSyncSection(ctx: AppContext): SectionModule {
       ui.slider({
         label: 'Mischung',
         hint: 'Links: Mund nur aus der Kamera · Rechts: Mund nur aus dem Mikrofon',
-        min: 0, max: 1, step: 0.01, format: (v) => `${Math.round(v * 100)} % Audio`,
+        min: 0, max: 1, step: 0.01, format: fmt.pct,
         get: (s) => s.lipSync.mix,
         set: (v) => ({ lipSync: { mix: v } }),
       }),

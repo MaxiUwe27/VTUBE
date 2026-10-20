@@ -70,7 +70,7 @@ export function trackingSection(ctx: AppContext): SectionModule {
     onClick: () => actions.calibrate(),
   });
   const resetBtn = button('Zurücksetzen', {
-    variant: 'ghost', title: 'Kalibrierung zurücksetzen',
+    variant: 'ghost', small: true, title: 'Kalibrierung zurücksetzen',
     onClick: () => actions.resetCalibration(),
   });
   const calibState = h('div', { class: 'calib-state' });
@@ -82,7 +82,7 @@ export function trackingSection(ctx: AppContext): SectionModule {
   });
   ui.bind(() => {
     const cal = store.value.tracking.calibration;
-    calibState.replaceChildren(statusDot(cal ? 'ok' : 'off'), h('span', null, cal ? 'Kalibriert' : 'Nicht kalibriert – Standardwerte aktiv'));
+    calibState.replaceChildren(statusDot(cal ? 'ok' : 'off'), h('span', { class: 'calib-text' }, cal ? 'Kalibriert' : 'Nicht kalibriert'), resetBtn);
     resetBtn.disabled = !cal;
   });
 
@@ -133,7 +133,7 @@ export function trackingSection(ctx: AppContext): SectionModule {
     preview,
     subhead('Kalibrierung'),
     hint('Gerade in die Kamera schauen, entspanntes neutrales Gesicht, Mund geschlossen. Nach 3 Sekunden wird die Haltung übernommen.'),
-    h('div', { class: 'btn-row' }, calibBtn, resetBtn),
+    h('div', { class: 'btn-row' }, calibBtn),
     calibState,
   );
 
@@ -150,6 +150,7 @@ export function trackingSection(ctx: AppContext): SectionModule {
     errorBox.textContent = t.error ?? '';
     toggleClass(errorBox, 'hidden', !(t.state === 'error' && t.error));
     toggleClass(preview, 'off', t.state !== 'running');
+    previewPlaceholder.textContent = t.state === 'starting' ? 'Kamera wird gestartet…' : t.state === 'error' ? 'Kein Kamerabild' : 'Kamera ist aus';
     status.set('delegate', t.state !== 'running' ? '–'
       : tracker.delegate === 'GPU' ? 'GPU'
       : tracker.delegate === 'CPU' ? (s.tracking.useGpu ? 'CPU (GPU nicht verfügbar)' : 'CPU')

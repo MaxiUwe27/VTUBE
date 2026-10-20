@@ -175,7 +175,8 @@ export class Controls {
     };
   }
 
-  segmented<T>(o: BaseOpts<T> & { options: Opt<T>[] }): HTMLElement {
+  /** Button group. `stacked` puts the label above a full-width group (for long option labels). */
+  segmented<T>(o: BaseOpts<T> & { options: Opt<T>[]; stacked?: boolean }): HTMLElement {
     const group = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': o.label });
     const buttons = o.options.map((opt) => {
       const b = h('button', { type: 'button', class: 'seg-btn', title: opt.title, role: 'radio' }, opt.label);
@@ -183,7 +184,7 @@ export class Controls {
       group.appendChild(b);
       return b;
     });
-    const row = h('div', { class: 'ctl ctl-seg' }, labelEl(o.label, o.hint), group);
+    const row = h('div', { class: `ctl ctl-seg${o.stacked ? ' stacked' : ''}` }, labelEl(o.label, o.hint), group);
     this.bind(() => {
       const cur = keyOf(o.get(this.store.value));
       const en = this.isEnabled(o);

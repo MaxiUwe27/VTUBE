@@ -229,7 +229,8 @@ b { font-weight: 600; color: var(--text); }
   padding: 48px 64px;
   border-radius: 22px;
   border: 2px dashed var(--accent-2);
-  background: rgba(139, 92, 246, 0.1);
+  background: rgba(22, 20, 34, 0.92);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
   color: var(--accent-2);
 }
 .drop-box .icon { width: 44px; height: 44px; }
@@ -347,14 +348,15 @@ b { font-weight: 600; color: var(--text); }
 
 .ctl {
   display: grid;
-  grid-template-columns: 118px minmax(0, 1fr);
+  grid-template-columns: 124px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   min-height: 32px;
   padding: 3px 0;
 }
 .ctl.disabled { opacity: 0.42; }
-.ctl-slider { grid-template-columns: 118px minmax(0, 1fr) 54px; }
+.ctl-slider { grid-template-columns: 124px minmax(0, 1fr) 48px; }
+.ctl-seg.stacked { grid-template-columns: minmax(0, 1fr); gap: 6px; padding-bottom: 6px; }
 .ctl-toggle { grid-template-columns: minmax(0, 1fr) auto; }
 .ctl-label {
   color: var(--text-2);
@@ -705,10 +707,11 @@ b { font-weight: 600; color: var(--text); }
   color: var(--muted);
   font-size: 12px;
 }
-.preview.off .preview-inner { visibility: hidden; }
-.preview.off .preview-placeholder { display: grid; }
+.preview.off .preview-inner { display: none; }
+.preview.off .preview-placeholder { display: grid; position: static; padding: 22px 0; }
 
 .calib-state { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 12px; margin-top: 2px; }
+.calib-text { flex: 1; }
 
 /* meters */
 .meter-card { padding: 8px 12px; }
@@ -746,7 +749,7 @@ b { font-weight: 600; color: var(--text); }
 .mix-scale {
   display: flex;
   justify-content: space-between;
-  margin: -4px 64px 0 128px;
+  margin: -4px 58px 0 134px;
   font-size: 10.5px;
   color: var(--muted);
 }

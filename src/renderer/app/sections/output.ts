@@ -131,6 +131,7 @@ export function outputSection(ctx: AppContext): SectionModule {
     devInput.el,
     ui.segmented<string>({
       label: 'Auflösung',
+      stacked: true,
       options: [
         { value: '640x360', label: '640×360' },
         { value: '1280x720', label: '1280×720' },
