@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VTube Linux – Output</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent !important;
+    }
+    #avatar {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      background: transparent;
+    }
+    #status {
+      position: fixed;
+      left: 8px;
+      bottom: 8px;
+      font: 12px/1.4 system-ui, sans-serif;
+      color: #fff;
+      background: rgba(0, 0, 0, 0.55);
+      padding: 4px 8px;
+      border-radius: 4px;
+      white-space: pre;
+      pointer-events: none;
+    }
+    #status[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="avatar"></canvas>
+  <div id="status" hidden></div>
+  <script type="module" src="./output/output.ts"></script>
+</body>
+</html>
