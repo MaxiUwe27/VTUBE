@@ -36,13 +36,20 @@ export async function createLandmarker(assetBase: string, delegate: Delegate): P
     fsP.catch(() => filesetCache.delete(assetBase));
   }
   const fileset = await fsP;
-  const make = (d: Delegate) => FaceLandmarker.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: assetBase + '/face_landmarker.task', delegate: d },
-    runningMode: 'VIDEO',
-    numFaces: 1,
-    outputFaceBlendshapes: true,
-    outputFacialTransformationMatrixes: true,
-  });
+  // MediaPipe consumes (and deletes) self.ModuleFactory on every createFromOptions and re-runs the wasm
+  // loader script to get it back. In a module worker the loader is an ES module that import() caches,
+  // so it does not re-run → a 2nd landmarker (CPU fallback, restart) would fail with
+  // "ModuleFactory not set". Keep a reference to the factory and restore it before each creation.
+  let factory: unknown = null;
+  if (inModuleWorker()) {
+    const mod = await import(/* @vite-ignore */ fileset.wasmLoaderPath);
+    factory = mod.default ?? (globalThis as Record<string, unknown>).ModuleFactory ?? null;
+  }
+  const make = (d: Delegate) => {
+    const g = globalThis as Record<string, unknown>;
+    if (factory && !g.ModuleFactory) g.ModuleFactory = factory;
+    return createWith(fileset, assetBase, d);
+  };
   if (delegate === 'GPU') {
     try {
       return { lm: await make('GPU'), delegate: 'GPU' };
@@ -51,6 +58,16 @@ export async function createLandmarker(assetBase: string, delegate: Delegate): P
     }
   }
   return { lm: await make('CPU'), delegate: 'CPU' };
+}
+
+function createWith(fileset: WasmFileset, assetBase: string, d: Delegate): Promise<FaceLandmarker> {
+  return FaceLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: assetBase + '/face_landmarker.task', delegate: d },
+    runningMode: 'VIDEO',
+    numFaces: 1,
+    outputFaceBlendshapes: true,
+    outputFacialTransformationMatrixes: true,
+  });
 }
 
 /** Compact, transferable representation of one detection result. */

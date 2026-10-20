@@ -59,7 +59,7 @@ export const BS_GROUP: Uint8Array = (() => {
 export const DEFAULT_BASELINE: Float32Array = (() => {
   const b = new Float32Array(N_BS);
   const set = (prefix: string, v: number) => ARKIT_NAMES.forEach((n, i) => { if (n.startsWith(prefix)) b[i] = v; });
-  set('eyeBlink', 0.15); set('eyeSquint', 0.25); set('eyeWide', 0.02); set('eyeLook', 0.06);
+  set('eyeBlink', 0.15); set('eyeSquint', 0.25); set('eyeWide', 0.02); set('eyeLook', 0.06); set('eyeLookDown', 0.1); // most people look at a screen below the camera
   set('browDown', 0.08); set('browInnerUp', 0.1); set('browOuterUp', 0.05);
   set('cheekSquint', 0.05); set('cheekPuff', 0.02); set('noseSneer', 0.03);
   set('jaw', 0.02); set('jawOpen', 0.03);

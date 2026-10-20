@@ -10,10 +10,11 @@
 //   rotation about +X by +a  → head nods DOWN                        (forward +Z swings to -Y)
 //   rotation about +Z by +a  → head tilts toward the avatar's own RIGHT shoulder (up +Y swings to -X)
 //
-// !! VRM0 models: three-vrm builds the normalized rig in the model's ORIGINAL frame (VRM0 faces -Z)
-// and VRMUtils.rotateVRM0 only rotates vrm.scene by 180° about Y. So for VRM0 the renderer must
-// convert these VRM1-frame quaternions with (x, y, z, w) → (-x, y, -z, w) and hipsOffset with
-// (x, y, z) → (-x, y, -z) (the same flip three-vrm's own mixamo/VRMA examples apply).
+// This matches the renderer's verified convention (screenshots on VRM0 + VRM1): AvatarPose bones are
+// ALWAYS in the VRM1 normalized frame; the renderer converts VRM0 models itself (three-vrm builds VRM0's
+// normalized rig in the original -Z-facing frame, so it needs (x,y,z,w) → (-x,y,-z,w)).
+//   look to own left by θ → (0, sin θ/2, 0, cos θ/2); look up by θ → (−sin θ/2, 0, 0, cos θ/2);
+//   tilt to own left by θ → (0, 0, −sin θ/2, cos θ/2).
 //
 // The solver works internally with SEMANTIC avatar angles (radians):
 //   yaw   > 0 : avatar turns to its own left
@@ -32,10 +33,10 @@ export const HIPS_Z_SIGN = 1;
 
 // ── lookAt (AvatarPose.lookAt, degrees) ──────────────────────────────────────────────────────
 // Contract (types.ts): yaw > 0 = avatar looks to its own left, pitch > 0 = up.
-// NOTE for the renderer: three-vrm's VRMLookAt.yaw/pitch & applyYawPitch use yaw > 0 = toward +X
+// (Renderer note: three-vrm's VRMLookAt.yaw/pitch & applyYawPitch use yaw > 0 = toward +X
 // (= avatar's left for VRM1, same as ours) but pitch > 0 = DOWN. So the renderer must set
 // vrm.lookAt.pitch = -pose.lookAt.pitch (verified in three-vrm-core: VRMLookAtBoneApplier sets
 // Euler.x = +pitch for the eye bones, which rotates +Z toward -Y; the expression applier maps
-// pitch < 0 to "lookUp").
+// pitch < 0 to "lookUp").)
 export const LOOK_YAW_SIGN = 1;
 export const LOOK_PITCH_SIGN = 1;

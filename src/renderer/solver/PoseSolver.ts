@@ -50,7 +50,7 @@ const IS_EYE_LOOK = ARKIT_NAMES.map((n) => n.startsWith('eyeLook'));
 const IS_SPEECH_SHAPE = ARKIT_NAMES.map((n) => /^(jawOpen|mouthClose|mouthFunnel|mouthPucker|mouthLowerDown|mouthUpperUp|mouthStretch)/.test(n));
 
 /** Emotion → how much it suppresses blinks / mouth visemes (avoids VRM expression clipping). */
-const EMO_BLINK_DAMP = { happy: 0.7, angry: 0.3, sad: 0.3, relaxed: 0.6, surprised: 0.85 };
+const EMO_BLINK_DAMP = { happy: 0.5, angry: 0.3, sad: 0.3, relaxed: 0.6, surprised: 0.85 };
 const EMO_MOUTH_DAMP = { happy: 0.35, angry: 0.3, sad: 0.3, relaxed: 0.2, surprised: 0.6 };
 
 const geo = (a: number, b: number, s: number) => a * Math.pow(b / a, s);
@@ -289,8 +289,9 @@ export class PoseSolver {
     if (this.l.enabled && viseme) {
       const m = clamp01(this.l.mix);
       const g = smoothstep(viseme.volume, 0.02, 0.12);   // audio activity
-      // Silent → camera wins (unless mix = 1 "audio only"); loud → camera weighted by (1 - mix).
-      camW = (m >= 0.99 ? 0 : 1) + ((1 - m) - (m >= 0.99 ? 0 : 1)) * g;
+      // mix = 1 → audio only. Otherwise: silent → camera fully; loud → camera mouth is partly reduced so
+      // the audio vowel shape can show, and the max-blend lets audio open a mouth the camera sees closed.
+      camW = m >= 0.99 ? 0 : 1 - 0.5 * m * g;
       audW = Math.sqrt(m);
       A = viseme.visemes;
     }
