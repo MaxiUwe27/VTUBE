@@ -5,16 +5,24 @@
   "description": "VRM VTuber app with webcam face tracking for Linux",
   "author": "maxiuwe27",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MaxiUwe27/VTUBE.git"
+  },
+  "homepage": "https://github.com/MaxiUwe27/VTUBE",
   "private": true,
   "main": "dist-electron/main/main.js",
+  "desktopName": "io.github.maxiuwe27.vtubelinux.desktop",
   "scripts": {
     "prepare-assets": "node scripts/prepare-assets.mjs",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
     "build": "npm run prepare-assets && npm run build:main && npm run build:renderer",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
-    "start": "npm run build && electron .",
-    "dev": "npm run build && electron . --dev",
+    "start": "npm run build && node scripts/run-electron.mjs",
+    "dev": "npm run build && node scripts/run-electron.mjs --dev",
+    "electron": "node scripts/run-electron.mjs",
+    "icon": "node scripts/make-icon.mjs",
     "dist": "npm run build && electron-builder --linux AppImage --publish never"
   },
   "dependencies": {
@@ -31,5 +39,44 @@
     "three": "^0.180.0",
     "typescript": "~5.9.3",
     "vite": "^7.3.0"
+  },
+  "build": {
+    "appId": "io.github.maxiuwe27.vtubelinux",
+    "productName": "VTube Linux",
+    "copyright": "Copyright © 2026 maxiuwe27",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Video;AudioVideo",
+      "icon": "build/icon.png",
+      "executableName": "vtube-linux",
+      "artifactName": "VTube-Linux-${version}-${arch}.${ext}",
+      "synopsis": "VRM VTuber app with webcam face tracking",
+      "description": "VRM avatars driven by webcam face tracking (MediaPipe), OBS browser source and v4l2loopback virtual camera.",
+      "desktop": {
+        "entry": {
+          "Keywords": "vtuber;vrm;avatar;facetracking;obs;"
+        }
+      },
+      "syncDesktopName": true
+    },
+    "publish": null
   }
 }
