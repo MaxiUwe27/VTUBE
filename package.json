@@ -1,0 +1,35 @@
+{
+  "name": "vtube-studio-linux",
+  "productName": "VTube Linux",
+  "version": "0.1.0",
+  "description": "VRM VTuber app with webcam face tracking for Linux",
+  "author": "maxiuwe27",
+  "license": "MIT",
+  "private": true,
+  "main": "dist-electron/main/main.js",
+  "scripts": {
+    "prepare-assets": "node scripts/prepare-assets.mjs",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "vite build",
+    "build": "npm run prepare-assets && npm run build:main && npm run build:renderer",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron . --dev",
+    "dist": "npm run build && electron-builder --linux AppImage --publish never"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@mediapipe/tasks-vision": "0.10.35",
+    "@pixiv/three-vrm": "^3.5.5",
+    "@types/node": "^22.0.0",
+    "@types/three": "^0.180.0",
+    "@types/ws": "^8.18.0",
+    "electron": "38.8.6",
+    "electron-builder": "^26.0.0",
+    "three": "^0.180.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.0"
+  }
+}
