@@ -14,13 +14,15 @@ import type { LipSyncSettings } from '../../shared/settings';
 const FFT_SIZE = 2048;
 const MIN_UPDATE_MS = 8;
 
-// Vowel centres in (f1 0..1, front 0..1)
+// Vowel centres in (f1 0..1, front 0..1). Tuned on formant-synthesized vowels (measured f1Hz /
+// ratioDb: a ≈ 810/-35, e ≈ 455/-2, i ≈ 265/+8, o ≈ 545/-51, u ≈ 345/-48); real voices have a flatter
+// spectral tilt, so the 'a' centre sits a bit toward the front.
 const VOWELS = [
-  { k: 'aa', f1: 0.9, fr: 0.5 },
-  { k: 'ee', f1: 0.5, fr: 0.78 },
-  { k: 'ih', f1: 0.12, fr: 0.92 },
-  { k: 'oh', f1: 0.55, fr: 0.22 },
-  { k: 'ou', f1: 0.15, fr: 0.1 },
+  { k: 'aa', f1: 1.0, fr: 0.4 },
+  { k: 'ee', f1: 0.36, fr: 0.95 },
+  { k: 'ih', f1: 0.0, fr: 1.0 },
+  { k: 'oh', f1: 0.52, fr: 0.05 },
+  { k: 'ou', f1: 0.12, fr: 0.0 },
 ] as const;
 type VisemeKey = (typeof VOWELS)[number]['k'];
 
@@ -42,6 +44,9 @@ export class LipSync {
   private volume = 0;
   private vis: Record<VisemeKey, number> = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
   private shape: Record<VisemeKey, number> = { aa: 1, ih: 0, ou: 0, ee: 0, oh: 0 };
+
+  /** Last raw analysis features (for UI meters / tuning). */
+  readonly debug = { f1Hz: 0, ratioDb: 0, voicedness: 0, level: 0 };
 
   get running(): boolean { return !!this.analyser; }
 
@@ -158,12 +163,14 @@ export class LipSync {
       }
     }
     const f1Hz = den > 0 ? num / den : 500;
-    const f1 = clamp01((f1Hz - 330) / (720 - 330));
+    const f1 = clamp01((f1Hz - 280) / (800 - 280));
     const low = band(600, 1400), high = band(1800, 3400);
-    const ratioDb = 10 * Math.log10((high + 1e-12) / (low + 1e-12)); // ≈ -25 (back) .. -3 (front)
-    const front = clamp01((ratioDb + 22) / 16);
+    const ratioDb = 10 * Math.log10((high + 1e-12) / (low + 1e-12)); // ≈ -50 (back) .. +8 (front)
+    const front = clamp01((ratioDb + 45) / 40);
     const voiced = band(100, 1500), fric = band(4000, 8000);
     const voicedness = clamp01(voiced / (voiced + 2 * fric + 1e-12) * 1.4);
+
+    this.debug.f1Hz = f1Hz; this.debug.ratioDb = ratioDb; this.debug.voicedness = voicedness; this.debug.level = level;
 
     // Shape weights (soft-min over squared distance); only updated when there is voice.
     if (this.volume > 0.02) {

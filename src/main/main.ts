@@ -1,11 +1,11 @@
 // Electron main process: window, IPC, settings, OBS server, virtual camera.
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, session, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ModelFile, ServerInfo, VcamStatus } from '../shared/api';
 import type { DeepPartial, Settings } from '../shared/settings';
 import type { AvatarPose } from '../shared/types';
-import { OutputServer } from './server';
+import { MIME, OutputServer } from './server';
 import { SettingsStore } from './settingsStore';
 import { listVideoDevices, VirtualCam } from './virtualCam';
 
@@ -35,6 +35,30 @@ function appendFeatures(sw: string, features: string[]): void {
   // appendSwitch replaces earlier values of the same switch -> merge with what the user passed.
   const existing = cl.getSwitchValue(sw).split(',').filter(Boolean);
   cl.appendSwitch(sw, [...new Set([...existing, ...features])].join(','));
+}
+
+// The UI is served from app://local/ instead of file:// — MediaPipe loads its wasm/model via
+// fetch() and runs in a module Worker, both of which Chromium refuses for file:// pages.
+const APP_SCHEME = 'app';
+protocol.registerSchemesAsPrivileged([
+  { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+]);
+
+function registerAppProtocol(): void {
+  const root = path.resolve(rendererDir);
+  protocol.handle(APP_SCHEME, async (req) => {
+    const rel = decodeURIComponent(new URL(req.url).pathname).replace(/^\/+/, '') || 'index.html';
+    const file = path.resolve(root, rel);
+    if (file !== root && !file.startsWith(root + path.sep)) return new Response('Forbidden', { status: 403 });
+    try {
+      const data = await fs.promises.readFile(file); // works inside app.asar too
+      return new Response(data, {
+        headers: { 'Content-Type': MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream' },
+      });
+    } catch {
+      return new Response('Not found', { status: 404 });
+    }
+  });
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -83,7 +107,7 @@ function createWindow(): void {
 
   // The app is a single local page: no navigation, external links go to the browser.
   wc.on('will-navigate', (e, url) => {
-    if (!url.startsWith('file://')) {
+    if (!url.startsWith(`${APP_SCHEME}://`)) {
       e.preventDefault();
       openExternalSafe(url);
     }
@@ -103,7 +127,7 @@ function createWindow(): void {
   if (!fs.existsSync(index)) {
     dialog.showErrorBox('VTube Linux', `Renderer nicht gefunden:\n${index}\n\nBitte zuerst "npm run build" ausführen.`);
   }
-  void win.loadFile(index);
+  void win.loadURL(`${APP_SCHEME}://local/index.html`);
   if (isDev) wc.openDevTools({ mode: 'detach' });
 }
 
@@ -300,6 +324,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => app.quit
 
 void app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
+  registerAppProtocol();
 
   const ses = session.defaultSession;
   // Camera + microphone only; everything else (notifications, geolocation, MIDI, ...) is denied.

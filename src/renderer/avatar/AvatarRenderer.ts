@@ -507,9 +507,10 @@ export class AvatarRenderer {
     const alpha = snap ? 1 : 1 - Math.exp(-dt * BONE_RATE * 1.5);
     this.gaze.yaw += (m.gazeTarget.yaw - this.gaze.yaw) * alpha;
     this.gaze.pitch += (m.gazeTarget.pitch - this.gaze.pitch) * alpha;
-    // VRMLookAt: yaw > 0 = looks to its own left, pitch > 0 = up (same as AvatarPose).
+    // VRMLookAt: yaw > 0 = looks to its own left (same as AvatarPose), but pitch > 0 = DOWN
+    // (see three-vrm VRMLookAtExpressionApplier: pitch < 0 -> "lookUp"), so negate.
     la.yaw = this.gaze.yaw;
-    la.pitch = this.gaze.pitch;
+    la.pitch = -this.gaze.pitch;
   }
 
   // ---------------------------------------------------------------- model setup

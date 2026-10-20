@@ -17,7 +17,7 @@ const HOST = '127.0.0.1';
 const POSE_INTERVAL_MS = 1000 / 60;   // max pose broadcast rate
 const MAX_CLIENT_BUFFER = 1 << 20;    // skip pose frames for clients that lag behind (bytes)
 
-const MIME: Record<string, string> = {
+export const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
