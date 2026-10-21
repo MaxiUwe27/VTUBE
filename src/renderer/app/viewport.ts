@@ -1,11 +1,12 @@
 // Avatar viewport chrome: empty state, loading pill, calibration countdown, optional FPS badge,
-// hover-only panel button and the window-wide drag & drop overlay.
+// hover-only panel button, the window-wide drag & drop overlay and mouse navigation (viewportNav.ts).
 // The canvas itself stays clean (important for OBS window capture).
 
 import type { AppContext } from './context';
 import { button } from './controls';
 import { h, icon, setText, toggleClass } from './dom';
 import { toast } from './toast';
+import { setupViewportNav } from './viewportNav';
 
 export function setupViewport(ctx: AppContext, viewport: HTMLElement, app: HTMLElement): { tick(now: number): void } {
   const { live, actions, store, ui, renderer } = ctx;
@@ -94,6 +95,10 @@ export function setupViewport(ctx: AppContext, viewport: HTMLElement, app: HTMLE
     }
     void actions.loadDroppedFile(vrm);
   });
+
+  // --- Mouse navigation (orbit / pan / zoom) – disabled while a file is dragged over the window --
+  const canvas = renderer.canvas;
+  setupViewportNav(store, canvas, { blocked: () => drop.classList.contains('visible') });
 
   let lastFpsAt = 0;
   return {

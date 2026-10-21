@@ -1,11 +1,44 @@
-// 2. Kamera & Tracking: device, resolution, fps, GPU, preview with landmark overlay,
-//    calibration, live status.
+// 2. Kamera & Tracking: device (or "Browserquelle" URL), resolution, fps, GPU, preview with landmark
+//    overlay, calibration, live status.
 
 import { FaceTracker } from '../../tracking/FaceTracker';
 import type { AppContext, SectionModule } from '../context';
 import { button, hint, iconButton, infoGrid, section, statusDot, subhead, type Opt } from '../controls';
 import { h, setText, toggleClass } from '../dom';
 import { toast } from '../toast';
+import type { SettingsPatch } from '../store';
+
+/** Select value of the "Browserquelle (URL) …" entry (never a real deviceId). */
+const URL_KEY = '\u0001url';
+const URL_OPT: Opt<string | null> = {
+  value: URL_KEY,
+  label: 'Browserquelle (URL) …',
+  title: 'Handy-Kamera-App, Video-Stream oder Webseite (z. B. VDO.Ninja-Link) als Kamera verwenden',
+};
+const MAX_RECENT_URLS = 10;
+
+/** User input → absolute URL ("192.168.0.5:8080/video" → "http://…"), or null if empty. */
+function normalizeUrl(raw: string): string | null {
+  const t = raw.trim();
+  if (!t) return null;
+  return /^[a-z][a-z0-9+.-]*:/i.test(t) && !/^[^/:]+:\d+(?:[/?#]|$)/.test(t) ? t : `http://${t}`;
+}
+
+/** German problem description for a URL the browser source cannot open, or null if fine. */
+function urlProblem(url: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return `Ungültige Adresse: ${url}`;
+  }
+  if (/^(rtsp|rtmp|rtp|srt):$/.test(u.protocol)) {
+    return 'RTSP/RTMP-Streams kann die Browserquelle nicht abspielen – in der Handy-App die HTTP-Adresse verwenden (z. B. http://IP:8080/video).';
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'Nur http:// und https:// Adressen sind möglich.';
+  if (!u.hostname) return `Ungültige Adresse: ${url}`;
+  return null;
+}
 
 export function trackingSection(ctx: AppContext): SectionModule {
   const { store, ui, live, actions, tracker } = ctx;
@@ -14,9 +47,9 @@ export function trackingSection(ctx: AppContext): SectionModule {
   const refreshBtn = iconButton('refresh', 'Kameraliste aktualisieren', () => void loadCameras(true));
   const camSelect = ui.select<string | null>({
     label: 'Kamera',
-    options: [{ value: null, label: 'Standard-Kamera' }],
-    get: (s) => s.camera.deviceId,
-    set: (v) => ({ camera: { deviceId: v } }),
+    options: [{ value: null, label: 'Standard-Kamera' }, URL_OPT],
+    get: (s) => (s.camera.source === 'url' ? URL_KEY : s.camera.deviceId),
+    set: (v) => (v === URL_KEY ? { camera: { source: 'url' } } : { camera: { source: 'device', deviceId: v } }),
     missingLabel: () => 'Gespeicherte Kamera (nicht gefunden)',
     extra: refreshBtn,
     // After a failure, picking the same camera again restarts the tracking.
@@ -30,6 +63,7 @@ export function trackingSection(ctx: AppContext): SectionModule {
       cams.forEach((c, i) => {
         if (c.deviceId) opts.push({ value: c.deviceId, label: c.label || `Kamera ${i + 1}` });
       });
+      opts.push(URL_OPT);
       camSelect.setOptions(opts);
       if (manual) toast(`${cams.length} Kamera${cams.length === 1 ? '' : 's'} gefunden.`, 'info', 2000);
     } catch (err) {
@@ -47,6 +81,109 @@ export function trackingSection(ctx: AppContext): SectionModule {
     }
   });
   navigator.mediaDevices?.addEventListener?.('devicechange', () => void loadCameras());
+
+  // --- Browserquelle (URL) ----------------------------------------------------------------------
+  const urlInputId = 'tracking-url';
+  const urlList = h('datalist', { id: `${urlInputId}-list` });
+  const urlInput = h('input', {
+    id: urlInputId, type: 'text', class: 'text', list: `${urlInputId}-list`, spellcheck: false, autocomplete: 'off',
+    placeholder: 'http://192.168.x.x:8080/video',
+  });
+  const connect = () => {
+    const url = normalizeUrl(urlInput.value);
+    if (!url) {
+      toast('Bitte die Adresse der Browserquelle eingeben.', 'warning');
+      urlInput.focus();
+      return;
+    }
+    const problem = urlProblem(url);
+    if (problem) {
+      toast(problem, 'error');
+      urlInput.focus();
+      return;
+    }
+    urlInput.value = url;
+    const s = store.value;
+    const unchanged = s.camera.source === 'url' && s.camera.url === url && s.tracking.enabled;
+    const patch: SettingsPatch = { camera: { source: 'url', url } };
+    if (!s.tracking.enabled) patch.tracking = { enabled: true };
+    store.update(patch, 0);
+    if (unchanged) actions.restartTracker(); // same address again = reconnect
+  };
+  const connectBtn = button('Verbinden', {
+    icon: 'play', variant: 'primary', small: true, title: 'Browserquelle (neu) laden und als Kamerabild verwenden',
+    onClick: connect,
+  });
+  urlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      connect();
+    }
+  });
+  const urlState = h('div', { class: 'calib-state' });
+  const urlBox = h('div', { class: 'url-source' },
+    h('div', { class: 'ctl ctl-input' },
+      h('label', { class: 'ctl-label', for: urlInputId, title: 'Adresse einer Webseite oder eines Video-Streams' }, 'Adresse'),
+      h('div', { class: 'select-wrap' }, urlInput, urlList, connectBtn)),
+    urlState,
+    hint('Handy als Webcam: App „IP Webcam“ (Android) → ', h('code', null, 'http://192.168.x.x:8080/video'),
+      ', DroidCam → ', h('code', null, 'http://IP:4747/video'), ', oder ein VDO.Ninja-Link (',
+      h('code', null, 'https://vdo.ninja/?view=…'), '). Auch MP4/WebM-Videos und normale Webseiten gehen. ',
+      'Handy und PC müssen im selben WLAN sein. RTSP wird nicht unterstützt; selbst signierte HTTPS-Zertifikate ',
+      'werden abgelehnt (dann http:// verwenden). Auflösung/FPS unten = Größe und Bildrate der unsichtbaren Seite.'),
+  );
+  let shownRecent = '';
+  ui.bind(() => {
+    const c = store.value.camera;
+    toggleClass(urlBox, 'hidden', c.source !== 'url');
+    if (document.activeElement !== urlInput) urlInput.value = c.url;
+    const key = c.recentUrls.join('\n');
+    if (key !== shownRecent) {
+      shownRecent = key;
+      urlList.replaceChildren(...c.recentUrls.map((u) => h('option', { value: u })));
+    }
+  });
+  // Remember addresses that actually worked (max 10, newest first, no duplicates).
+  ctx.on('tracker', () => {
+    const c = store.value.camera;
+    if (live.tracker.state !== 'running' || c.source !== 'url' || !c.url || c.recentUrls[0] === c.url) return;
+    store.update({ camera: { recentUrls: [c.url, ...c.recentUrls.filter((u) => u !== c.url)].slice(0, MAX_RECENT_URLS) } }, 0);
+  });
+  const renderUrlState = (now: number) => {
+    const c = store.value.camera;
+    if (c.source !== 'url') return;
+    const t = live.tracker.state;
+    const info = tracker.urlSource;
+    let dot: 'ok' | 'warn' | 'error' | 'off' = 'off';
+    let text = 'Nicht verbunden';
+    if (t === 'starting') {
+      dot = 'warn';
+      text = info?.state === 'error' ? `Fehler: ${info.message ?? ''}` : 'Verbinde…';
+    } else if (t === 'running' && info) {
+      const idle = now - tracker.urlLastFrameAt;
+      if (info.state === 'error') {
+        dot = 'error';
+        text = `${info.message ?? 'Fehler'} – neuer Versuch läuft…`;
+      } else if (info.state === 'reconnecting' || info.state === 'loading') {
+        dot = 'warn';
+        text = info.message || 'Verbindung wird wiederhergestellt…';
+      } else if (idle > 2000) {
+        dot = 'warn';
+        text = `Verbunden, aber keine neuen Bilder seit ${Math.round(idle / 1000)} s`;
+      } else {
+        dot = 'ok';
+        text = `Verbunden – ${info.width}×${info.height}`;
+      }
+    } else if (t === 'error') {
+      dot = 'error';
+      text = 'Getrennt (siehe Fehler unten)';
+    }
+    const cur = urlState.dataset.v;
+    const v = `${dot}|${text}`;
+    if (cur === v) return;
+    urlState.dataset.v = v;
+    urlState.replaceChildren(statusDot(dot), h('span', { class: 'calib-text', title: info?.url ?? c.url }, text));
+  };
 
   // --- Status ---------------------------------------------------------------------------------
   const status = infoGrid([
@@ -101,9 +238,10 @@ export function trackingSection(ctx: AppContext): SectionModule {
       set: (v) => ({ tracking: { enabled: v } }),
     }),
     camSelect.el,
+    urlBox,
     ui.segmented<string>({
       label: 'Auflösung',
-      hint: 'Höhere Auflösung = genauer, aber mehr Rechenlast',
+      hint: 'Höhere Auflösung = genauer, aber mehr Rechenlast (bei der Browserquelle: Größe der Seite)',
       options: [{ value: '640x480', label: '640×480' }, { value: '1280x720', label: '1280×720' }],
       get: (s) => `${s.camera.width}x${s.camera.height}`,
       set: (v) => {
@@ -158,7 +296,10 @@ export function trackingSection(ctx: AppContext): SectionModule {
     toggleClass(errorBox, 'hidden', !(t.state === 'error' && t.error));
     camSelect.refresh();
     toggleClass(preview, 'off', t.state !== 'running');
-    previewPlaceholder.textContent = t.state === 'starting' ? 'Kamera wird gestartet…' : t.state === 'error' ? 'Kein Kamerabild' : 'Kamera ist aus';
+    const isUrl = s.camera.source === 'url';
+    previewPlaceholder.textContent = t.state === 'starting' ? (isUrl ? 'Browserquelle wird geladen…' : 'Kamera wird gestartet…')
+      : t.state === 'error' ? 'Kein Kamerabild' : 'Kamera ist aus';
+    renderUrlState(performance.now());
     status.set('delegate', t.state !== 'running' ? '–'
       : tracker.delegate === 'GPU' ? 'GPU'
       : tracker.delegate === 'CPU' ? (s.tracking.useGpu ? 'CPU (GPU nicht verfügbar)' : 'CPU')
@@ -207,10 +348,11 @@ export function trackingSection(ctx: AppContext): SectionModule {
       const face = live.lastFace;
       const stale = now - live.lastFaceAt > 1000;
       if (t.state !== 'running') status.set('face', '–', 'muted');
-      else if (stale) status.set('face', 'Keine Kamerabilder', 'warn');
+      else if (stale) status.set('face', store.value.camera.source === 'url' ? 'Keine Bilder von der Browserquelle' : 'Keine Kamerabilder', 'warn');
       else if (face?.detected) status.set('face', h('span', { class: 'with-dot' }, statusDot('ok'), 'Erkannt'), 'good');
       else status.set('face', h('span', { class: 'with-dot' }, statusDot('warn'), 'Nicht erkannt'), 'warn');
       status.set('fps', t.state === 'running' ? `${Math.round(tracker.fps)} fps` : '–');
+      renderUrlState(now);
       if (tracker.delegate !== lastDelegate) {
         lastDelegate = tracker.delegate;
         renderStatus();

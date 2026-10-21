@@ -4,10 +4,16 @@
 // blocks avatar rendering; frames are handed over as transferred ImageBitmaps, at most one in flight
 // (if detection is slower than the camera, frames are dropped instead of queueing → no added latency).
 // If the worker cannot start, it falls back to running MediaPipe on the main thread.
+//
+// Input is either a webcam (cam.source 'device', getUserMedia) or a URL ("Browserquelle", cam.source
+// 'url'): main renders the page offscreen and streams its frames (window.vtube.urlSourceStart), which
+// UrlFrameSource turns into a video track for the same <video> element.
 
 import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import type { FaceFrame } from '../../shared/types';
 import type { CameraSettings } from '../../shared/settings';
+import type { UrlSourceState } from '../../shared/api';
+import { UrlFrameSource } from './urlFrameSource';
 import { createLandmarker, packResult, SLOW_GPU_MS, type Delegate, type PackedResult } from './landmarkerCore';
 
 export { MP_LEFT_IS_USER_LEFT } from './landmarkerCore';
@@ -42,6 +48,27 @@ export class TrackerAbortError extends Error {
 export function isTrackerAbort(err: unknown): boolean {
   return !!err && typeof err === 'object' && (err as { trackerAborted?: unknown }).trackerAborted === true;
 }
+
+/** Failure of the URL source ("Browserquelle"). `message` is German and user-facing. */
+export class UrlSourceError extends Error {
+  constructor(readonly code: 'no-url' | 'invalid' | 'unavailable' | 'load' | 'fatal' | 'timeout' | 'stalled', message: string) {
+    super(message);
+    this.name = 'UrlSourceError';
+  }
+}
+
+export function isUrlSourceError(err: unknown): err is UrlSourceError {
+  return !!err && typeof err === 'object' && (err as { name?: unknown }).name === 'UrlSourceError';
+}
+
+/** Live state of the URL source (null when the webcam is used / stopped). */
+export interface UrlSourceInfo { state: UrlSourceState; message: string | null; url: string; width: number; height: number }
+
+/** Waiting for the first picture of a URL source at most this long. */
+const URL_FIRST_FRAME_MS = 20000;
+/** No picture from a running URL source this long → tracking error (main reconnects in between). */
+const URL_STALL_MS = 15000;
+let urlIdSeq = Math.floor(Math.random() * 1e6);
 
 /** getUserMedia failed because the requested (saved) camera is not present anymore. */
 function isMissingDeviceError(err: unknown): boolean {
@@ -99,6 +126,14 @@ export class FaceTracker {
   private recovering = false;
   private errorCount = 0;
   private _detectMs = 0;
+  // URL source ("Browserquelle")
+  private urlSrc: UrlFrameSource | null = null;
+  private urlId = 0;
+  private urlUnsubs: (() => void)[] = [];
+  private urlWatch: ReturnType<typeof setInterval> | null = null;
+  private pendingSource: ((e: Error) => void) | null = null;
+  private lastUrlFrameAt = 0;
+  private _urlInfo: UrlSourceInfo | null = null;
 
   constructor(opts: FaceTrackerOptions) {
     this.assetBase = opts.assetBase.replace(/\/+$/, '');
@@ -125,6 +160,10 @@ export class FaceTracker {
   get detectMs(): number { return this._detectMs; }
   /** True when the saved camera (cam.deviceId) was not found and the default camera is used instead. */
   get cameraFallback(): boolean { return this._cameraFallback; }
+  /** State of the URL source ("Browserquelle"), null when a webcam is used or the tracker is stopped. */
+  get urlSource(): UrlSourceInfo | null { return this._urlInfo; }
+  /** performance.now() of the last picture received from the URL source (0 = none yet). */
+  get urlLastFrameAt(): number { return this.lastUrlFrameAt; }
   /** Normalized landmarks (x,y in 0..1 of the NON-mirrored video image) of the last frame, or null. */
   get lastLandmarks(): Landmark[] | null {
     if (!this.lmData) return null;
@@ -147,6 +186,8 @@ export class FaceTracker {
    * Opens the camera and the model. Rejects with a TrackerAbortError (name 'AbortError', see
    * isTrackerAbort) when stop() or another start() ran in the meantime.
    * If the saved camera (cam.deviceId) is missing, the default camera is used (see cameraFallback).
+   * cam.source === 'url': opens cam.url as "Browserquelle" instead (cam.width/height = page size, cam.fps =
+   * max frame rate); resolves after the first picture, rejects with a UrlSourceError on failures.
    */
   async start(cam: CameraSettings, useGpu: boolean): Promise<void> {
     this.stop();
@@ -160,7 +201,9 @@ export class FaceTracker {
         frameRate: { ideal: cam.fps },
       };
       let stream: MediaStream;
-      if (cam.deviceId) {
+      if (cam.source === 'url') {
+        stream = await this.openUrlSource(cam, session);
+      } else if (cam.deviceId) {
         try {
           stream = await navigator.mediaDevices.getUserMedia({ video: { ...video, deviceId: { exact: cam.deviceId } }, audio: false });
         } catch (e) {
@@ -218,6 +261,7 @@ export class FaceTracker {
       this.fpsWindowStart = performance.now();
       this.fpsCount = 0;
       this.scheduleNext(session);
+      if (this.urlSrc) this.urlWatch = setInterval(() => this.checkUrlStall(session), 1000);
     } catch (e) {
       if (session === this.session) { this.stop(); throw e; }
       throw isTrackerAbort(e) ? e : new TrackerAbortError(); // failure of a cancelled start: irrelevant
@@ -232,6 +276,12 @@ export class FaceTracker {
       this.pendingInit = null;
       reject(new TrackerAbortError());
     }
+    if (this.pendingSource) {
+      const reject = this.pendingSource;
+      this.pendingSource = null;
+      reject(new TrackerAbortError());
+    }
+    this.closeUrlSource();
     if (this.rvfcId && typeof this.video.cancelVideoFrameCallback === 'function') this.video.cancelVideoFrameCallback(this.rvfcId);
     if (this.rafId) cancelAnimationFrame(this.rafId);
     if (this.stallTimer) clearTimeout(this.stallTimer);
@@ -265,6 +315,87 @@ export class FaceTracker {
     this.lastVideoTime = -1;
     this.recovering = false;
     this.inFlight = false;
+  }
+
+  // ── URL source ("Browserquelle") ──────────────────────────────────────────────────────────
+
+  private async openUrlSource(cam: CameraSettings, session: number): Promise<MediaStream> {
+    const api = typeof window !== 'undefined' ? window.vtube : undefined;
+    if (!api?.urlSourceStart) throw new UrlSourceError('unavailable', 'Die Browserquelle ist hier nicht verfügbar.');
+    const url = (cam.url ?? '').trim();
+    if (!url) throw new UrlSourceError('no-url', 'Bitte die Adresse der Browserquelle eingeben und „Verbinden“ klicken.');
+    const id = ++urlIdSeq;
+    const src = new UrlFrameSource(cam.fps);
+    this.urlSrc = src;
+    this.urlId = id;
+    this.lastUrlFrameAt = 0;
+    this._urlInfo = { state: 'loading', message: null, url, width: 0, height: 0 };
+    let gotFrame = false;
+    let resolveFirst!: () => void;
+    let rejectFirst!: (e: Error) => void;
+    const first = new Promise<void>((res, rej) => { resolveFirst = res; rejectFirst = rej; });
+    first.catch(() => undefined);
+    this.pendingSource = rejectFirst;
+    this.urlUnsubs.push(api.onUrlSourceFrame((f) => {
+      if (f.id !== id || session !== this.session || !this.urlSrc) return;
+      src.push(f.data, f.width, f.height);
+      this.lastUrlFrameAt = performance.now();
+      const info = this._urlInfo;
+      if (info && (info.width !== f.width || info.height !== f.height)) this._urlInfo = { ...info, width: f.width, height: f.height };
+      if (!gotFrame) { gotFrame = true; resolveFirst(); }
+    }));
+    this.urlUnsubs.push(api.onUrlSourceStatus((st) => {
+      if (st.id !== id || session !== this.session) return;
+      this._urlInfo = { ...(this._urlInfo ?? { width: 0, height: 0 }), state: st.state, message: st.message ?? null, url: st.url };
+      if (st.state !== 'error') return;
+      const err = new UrlSourceError(st.fatal ? 'fatal' : 'load', `Browserquelle ${st.url}: ${st.message ?? 'Fehler'}`);
+      if (!gotFrame) rejectFirst(err);       // start() fails with the reason (main's retry stops with it)
+      else if (st.fatal && this._running) {   // otherwise main reconnects; checkUrlStall gives up later
+        this.stop();
+        this.onError?.(err);
+      }
+    }));
+    try {
+      await api.urlSourceStart({ id, url, width: cam.width, height: cam.height, fps: cam.fps });
+    } catch (e) {
+      if (session !== this.session) throw new TrackerAbortError();
+      throw new UrlSourceError('invalid', String((e as Error)?.message ?? e));
+    }
+    const timer = setTimeout(() => rejectFirst(new UrlSourceError('timeout',
+      `Keine Bilder von der Browserquelle ${url} (nach ${URL_FIRST_FRAME_MS / 1000} s).`)), URL_FIRST_FRAME_MS);
+    try {
+      await first;
+    } finally {
+      clearTimeout(timer);
+      if (this.pendingSource === rejectFirst) this.pendingSource = null;
+    }
+    if (session !== this.session) throw new TrackerAbortError();
+    return src.stream;
+  }
+
+  private checkUrlStall(session: number): void {
+    if (session !== this.session || !this._running || !this.urlSrc) return;
+    const idle = performance.now() - this.lastUrlFrameAt;
+    if (idle < URL_STALL_MS) return;
+    const why = this._urlInfo?.state === 'error' && this._urlInfo.message ? ` Letzter Fehler: ${this._urlInfo.message}` : '';
+    this.stop();
+    this.onError?.(new UrlSourceError('stalled', `Keine Bilder von der Browserquelle seit ${Math.round(idle / 1000)} s.${why}`));
+  }
+
+  private closeUrlSource(): void {
+    if (this.urlWatch) clearInterval(this.urlWatch);
+    this.urlWatch = null;
+    for (const off of this.urlUnsubs) {
+      try { off(); } catch { /* ignore */ }
+    }
+    this.urlUnsubs = [];
+    if (this.urlSrc) {
+      this.urlSrc.close();
+      this.urlSrc = null;
+      void window.vtube?.urlSourceStop(this.urlId).catch(() => undefined);
+    }
+    this._urlInfo = null;
+    this.lastUrlFrameAt = 0;
   }
 
   // ── Worker mode ────────────────────────────────────────────────────────────────────────────

@@ -2,12 +2,13 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, session, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { ModelFile, ServerInfo, VcamStatus } from '../shared/api';
+import type { ModelFile, ServerInfo, UrlSourceRequest, VcamStatus } from '../shared/api';
 import type { DeepPartial, Settings } from '../shared/settings';
 import type { AvatarPose } from '../shared/types';
 import { LatestQueue } from './serialQueue';
 import { MIME, OutputServer } from './server';
 import { SettingsStore } from './settingsStore';
+import { UrlSource } from './urlSource';
 import { VirtualCam } from './virtualCam';
 import {
   formatDeviceList, listVideoDevices, listVideoDevicesSync, resolveVcamDevice, VCAM_DEVICE_ENV, VCAM_DEVICE_FLAG,
@@ -109,6 +110,11 @@ const rendererDir = path.join(appRoot, 'dist/renderer');
 const store = new SettingsStore(path.join(app.getPath('userData'), 'settings.json'));
 const server = new OutputServer({ rootDir: rendererDir });
 const vcam = new VirtualCam();
+/** "Browserquelle": offscreen page whose frames feed the face tracker in the app window. */
+const urlSource = new UrlSource({
+  frame: (f) => { if (win && !win.isDestroyed()) win.webContents.send('urlsource:frame', f); else urlSource.stop(); },
+  status: (st) => { if (win && !win.isDestroyed()) win.webContents.send('urlsource:status', st); },
+});
 /** Every virtual camera start/stop/restart goes through this queue (IPC, settings, auto-start). Each
  *  operation brings the camera into the state wanted at the time it runs, so skipping superseded
  *  ones ("last request wins") is safe. */
@@ -147,7 +153,10 @@ function createWindow(): void {
   });
   const wc = win.webContents;
   win.once('ready-to-show', () => win?.show());
-  win.on('closed', () => { win = null; });
+  win.on('closed', () => {
+    win = null;
+    urlSource.stop(); // an offscreen window would otherwise keep the app alive (window-all-closed)
+  });
 
   // The app is a single local page: no navigation, external links go to the browser.
   wc.on('will-navigate', (e, url) => {
@@ -165,7 +174,12 @@ function createWindow(): void {
     if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) wc.toggleDevTools();
     else if (isDev && input.control && input.key.toLowerCase() === 'r') wc.reloadIgnoringCache();
   });
-  wc.on('render-process-gone', (_e, d) => console.error('[main] renderer gone:', d.reason, d.exitCode));
+  wc.on('render-process-gone', (_e, d) => {
+    console.error('[main] renderer gone:', d.reason, d.exitCode);
+    urlSource.stop();
+  });
+  // Reload (dev) / new document: the tracker that owned the URL source is gone.
+  wc.on('did-start-navigation', (d) => { if (d.isMainFrame && !d.isSameDocument) urlSource.stop(); });
 
   const index = path.join(rendererDir, 'index.html');
   if (!fs.existsSync(index)) {
@@ -363,6 +377,14 @@ function registerIpc(): void {
     if (buf) vcam.pushFrame(buf);
   });
 
+  handle('urlsource:start', (req: UrlSourceRequest) => {
+    if (quitting) throw new Error('Die App wird beendet.');
+    if (!req || typeof req !== 'object') throw new Error('Ungültige Anfrage.');
+    urlSource.start(req);
+  });
+  handle('urlsource:stop', (id?: number) => urlSource.stop(typeof id === 'number' ? id : undefined));
+  ipcMain.on('urlsource:ack', (e) => { if (trusted(e)) urlSource.ack(); });
+
   handle('shell:open', async (url: string) => {
     if (!openExternalSafe(String(url))) throw new Error('Nur http(s)-Links sind erlaubt.');
   });
@@ -387,6 +409,7 @@ app.on('window-all-closed', () => app.quit());
  *  (no "ffmpeg unexpectedly terminated" error, no /proc scan) and no restart is started. */
 function beginQuit(): void {
   quitting = true;
+  urlSource.stop();
   vcam.kill();
 }
 

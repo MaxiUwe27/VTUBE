@@ -12,7 +12,7 @@ import type { AvatarPose, HumanBone, VrmInfo } from '../../shared/types';
 import type { ViewSettings } from '../../shared/settings';
 import { DEFAULT_SETTINGS, mergeSettings } from '../../shared/settings';
 import { ExpressionMap, PERFECT_SYNC_MIN } from './expressions';
-import { type BodyMetrics, defaultMetrics, frameCamera } from './framing';
+import { type BodyMetrics, defaultMetrics, frameCamera, normalizeOrbit } from './framing';
 import { buildRestPose, computeIdle, IDLE_BONES, toVrm0 } from './bodyPose';
 import { Readback } from './readback';
 
@@ -73,6 +73,12 @@ interface LoadedModel {
   gotPose: boolean;
   needsSpringReset: number;        // frames until springBoneManager.reset()
 }
+
+/** Key light offset from its target for the frontal view (viewer's upper left, toward the camera). */
+const LIGHT_TARGET = new THREE.Vector3(0, 1.0, 0);
+const LIGHT_OFFSET = new THREE.Vector3(-0.6, 0.6, 2.0);
+/** Share of the camera pitch the key light follows (full pitch would light from below at −30°). */
+const LIGHT_PITCH_FOLLOW = 0.5;
 
 const _q = new THREE.Quaternion();
 const _poseQ = new Map<HumanBone, THREE.Quaternion>(TRACKED_BONES.map((b) => [b, new THREE.Quaternion()]));
@@ -144,9 +150,10 @@ export class AvatarRenderer {
     this.loader.setCrossOrigin('anonymous');
     this.loader.register((parser) => new VRMLoaderPlugin(parser));
 
-    // Key light from the front, upper left as seen by the viewer (avatar's right side).
-    this.dirLight.position.set(-0.6, 1.6, 2.0);
-    this.dirLight.target.position.set(0, 1.0, 0);
+    // Key light from the front, upper left as seen by the viewer (avatar's right side); it follows
+    // the camera orbit (see updateLight), so side views are lit like the front view.
+    this.dirLight.target.position.copy(LIGHT_TARGET);
+    this.dirLight.position.copy(LIGHT_TARGET).add(LIGHT_OFFSET);
     this.scene.add(this.dirLight, this.dirLight.target, this.ambient);
 
     canvas.addEventListener('webglcontextlost', this.onContextLost, false);
@@ -279,6 +286,7 @@ export class AvatarRenderer {
       this.renderer.setClearColor(this.bgColor, 1);
     }
     this.scene.background = null;
+    this.updateLight();
     this.updateCameras();
   }
 
@@ -735,6 +743,15 @@ export class AvatarRenderer {
     if (size.x !== w || size.y !== h) this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.updateCameras();
+  }
+
+  /** Rotates the key light with the camera orbit: full yaw, part of the pitch. */
+  private updateLight(): void {
+    const o = normalizeOrbit(this.view.orbit);
+    const e = new THREE.Euler(
+      -THREE.MathUtils.degToRad(o.pitch * LIGHT_PITCH_FOLLOW),
+      THREE.MathUtils.degToRad(o.yaw), 0, 'YXZ');
+    this.dirLight.position.copy(LIGHT_OFFSET).applyEuler(e).add(LIGHT_TARGET);
   }
 
   private updateCameras(): void {

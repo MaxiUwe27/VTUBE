@@ -9,7 +9,7 @@ VTuber-App für Linux: VRM-Avatar (VRM 0.x und 1.0) per Drag & Drop laden, mit n
 - **Lip-Sync per Mikrofon** zusätzlich zum Kamera-Mund (Mischung einstellbar).
 - **Kalibrierung** auf Ihr neutrales Gesicht (Taste `C`).
 - **Ausgabe**: OBS-Browserquelle (transparent), Chroma-Key-Hintergrund für Fenstererfassung, virtuelle Kamera (v4l2loopback).
-- SpringBones (Haare/Kleidung), Atmung/Idle-Animation, Arme natürlich gesenkt, Auto-Framing (Kopf/Oberkörper/Ganzkörper).
+- SpringBones (Haare/Kleidung), Atmung/Idle-Animation, Arme natürlich gesenkt, Auto-Framing (Kopf/Oberkörper/Ganzkörper), Kamera-Orbit um den Avatar (Maus oder Kugel).
 
 ## Installation (AppImage)
 
@@ -26,6 +26,11 @@ Selbst bauen: `npm ci && npm run dist` → `release/VTube-Linux-<version>-x86_64
 2. `.vrm` ins Fenster ziehen (oder „VRM öffnen…“ / `Strg+O`). Das zuletzt genutzte Modell wird beim Start wieder geladen.
 3. Gerade in die Kamera schauen, neutrales Gesicht → **Kalibrieren** (`C`). Das ist wichtig: ohne Kalibrierung ist z. B. eine Kamera über dem Monitor als „Kopf gesenkt“ sichtbar.
 4. Feintuning im Seitenpanel (`Tab`/`F1` blendet es aus): Glättung, Stärken, Emotionen. Doppelklick auf einen Regler setzt ihn zurück.
+5. Kamera einstellen – direkt mit der Maus im Avatar-Fenster: **linke Taste ziehen** dreht die Kamera um den Avatar
+   (z. B. leichte Seitenansicht), **rechte/mittlere Taste ziehen** verschiebt, **Mausrad** zoomt, **Doppelklick** setzt
+   die Ansicht zurück. Alternativ unter „Ansicht“: Kugel ziehen, Regler „Orbit horizontal/vertikal“ oder Voreinstellungen
+   (Frontal, Leicht links/rechts, Profil links/rechts, Von oben – „links/rechts“ = Kamera vom Zuschauer aus gesehen).
+   Die Ansicht gilt genauso für OBS-Browserquelle und virtuelle Kamera.
 
 ## OBS
 

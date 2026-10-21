@@ -2,7 +2,7 @@
 // LipSync, OBS output (sendPose), virtual camera frames, settings and the UI.
 
 import { AvatarRenderer } from '../avatar/AvatarRenderer';
-import { FaceTracker, isTrackerAbort } from '../tracking/FaceTracker';
+import { FaceTracker, isTrackerAbort, isUrlSourceError } from '../tracking/FaceTracker';
 import { LipSync } from '../audio/LipSync';
 import { PoseSolver } from '../solver/PoseSolver';
 import { DEFAULT_SETTINGS, mergeSettings, type Settings } from '../../shared/settings';
@@ -35,6 +35,7 @@ function errName(err: unknown): string {
 }
 
 function cameraErrorText(err: unknown): string {
+  if (isUrlSourceError(err)) return err.message; // "Browserquelle": already a German, specific message
   switch (errName(err)) {
     case 'NotAllowedError':
     case 'SecurityError':
@@ -282,7 +283,8 @@ async function bootstrap(): Promise<void> {
       if (isTrackerAbort(err)) return; // cancelled by a newer restart / shutdown – not an error
       const msg = cameraErrorText(err);
       setTracker('error', msg);
-      toast(msg, 'error');
+      // No URL entered yet (just switched to "Browserquelle"): the panel shows it, no toast needed.
+      if (!(isUrlSourceError(err) && err.code === 'no-url')) toast(msg, 'error');
     }
   }
   function restartTracker(delayMs = 0): void {
@@ -302,7 +304,7 @@ async function bootstrap(): Promise<void> {
   // e.g. no camera at start), or when the saved camera reappears while the default one is used.
   navigator.mediaDevices?.addEventListener?.('devicechange', () => {
     const s = store.value;
-    if (!s.tracking.enabled) return;
+    if (!s.tracking.enabled || s.camera.source === 'url') return;
     const st = live.tracker.state;
     if (st === 'error' || st === 'off' || (st === 'running' && !tracker.running)) {
       restartTracker(500);
@@ -316,7 +318,7 @@ async function bootstrap(): Promise<void> {
 
   tracker.onError = (err) => {
     if (live.tracker.state !== 'running') return;
-    const msg = /disconnect/i.test(err.message)
+    const msg = isUrlSourceError(err) ? err.message : /disconnect/i.test(err.message)
       ? 'Die Kameraverbindung wurde unterbrochen. Sobald die Kamera wieder da ist, startet das Tracking neu – oder „Erneut versuchen“ klicken.'
       : `Tracking-Fehler: ${err.message}`;
     setTracker('error', msg);
@@ -515,7 +517,7 @@ async function bootstrap(): Promise<void> {
 
     const cam = patch.camera;
     const trk = patch.tracking;
-    if ((cam && ('deviceId' in cam || 'width' in cam || 'height' in cam || 'fps' in cam)) ||
+    if ((cam && ('deviceId' in cam || 'source' in cam || 'url' in cam || 'width' in cam || 'height' in cam || 'fps' in cam)) ||
         (trk && ('enabled' in trk || 'useGpu' in trk))) {
       restartTracker(250);
     }

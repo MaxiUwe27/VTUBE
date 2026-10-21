@@ -80,6 +80,10 @@ b { font-weight: 600; color: var(--text); }
   display: block;
   outline: none;
 }
+/* Mouse navigation (viewportNav.ts): cursor feedback only, nothing is drawn over the avatar. */
+#avatar-canvas.nav { cursor: grab; touch-action: none; }
+#avatar-canvas.nav.grabbing { cursor: grabbing; }
+#avatar-canvas.nav.panning { cursor: move; }
 
 #panel {
   position: relative;
@@ -558,6 +562,17 @@ b { font-weight: 600; color: var(--text); }
 .btn-ghost.btn-icon { border-color: transparent; }
 .btn-ghost.btn-icon:hover:not(:disabled) { border-color: var(--border-strong); }
 .btn-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+
+/* camera orbit ball + presets (sections/view.ts, orbitBall.ts) */
+.orbit-row { display: flex; gap: 10px; align-items: flex-start; margin: 6px 0 4px; }
+.orbit-ball-wrap { flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.orbit-ball { display: block; border-radius: 50%; cursor: grab; touch-action: none; outline: none; }
+.orbit-ball.grabbing { cursor: grabbing; }
+.orbit-ball:focus-visible:not(.mouse) { box-shadow: 0 0 0 2px var(--accent-2); }
+.orbit-readout { font-size: 11.5px; line-height: 1.35; color: var(--muted); text-align: center; white-space: pre-line; max-width: 130px; }
+.orbit-presets { flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding-top: 4px; }
+.orbit-preset { padding: 0 4px; font-size: 11.5px; justify-content: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.orbit-preset.active { border-color: rgba(167, 139, 250, 0.7); background: var(--accent-soft); color: var(--text); }
 
 /* cards, info, alerts */
 .card {

@@ -39,7 +39,7 @@ export class AvatarRenderer {
   unloadVRM(): void;
   get vrmInfo(): VrmInfo | null;
   applyPose(pose: AvatarPose): void;     // setzt Zielwerte; Rendern passiert im eigenen rAF-Loop
-  setView(view: ViewSettings): void;     // Hintergrund, Licht, Kamera-Framing, FPS-Limit, Idle
+  setView(view: ViewSettings): void;     // Hintergrund, Licht, Kamera-Framing + Orbit (view.orbit), FPS-Limit, Idle
   start(): void; stop(): void; dispose(): void;
   onFrame: ((dtSeconds: number) => void) | null;  // nach jedem gerenderten Frame
   readPixels(width: number, height: number): Uint8Array | null; // RGBA top-down in Zielgröße (für vcam)

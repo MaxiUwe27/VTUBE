@@ -1,11 +1,36 @@
-// 6. Ansicht: background, framing, camera offsets, light, idle, arm pose, fps.
+// 6. Ansicht: background, framing, camera orbit (Kugel + presets), offsets, light, idle, arm pose, fps.
 
 import type { ViewSettings } from '../../../shared/settings';
 import type { AppContext, SectionModule } from '../context';
-import { fmt, hint, section, subhead } from '../controls';
+import { button, fmt, hint, section, subhead } from '../controls';
+import { h, toggleClass } from '../dom';
+import { orbitBall } from '../orbitBall';
+import {
+  currentOrbit, fmtPitch, fmtYaw, ORBIT_PITCH_MAX, ORBIT_PITCH_MIN, ORBIT_PRESETS, orbitPatch, resetViewPatch, ZOOM_MAX, ZOOM_MIN,
+} from '../orbit';
 
 export function viewSection(ctx: AppContext): SectionModule {
-  const { ui } = ctx;
+  const { ui, store } = ctx;
+
+  // Camera orbit: ball + presets side by side.
+  const presets = ORBIT_PRESETS.map((p) => {
+    const b = button(p.label, { small: true, title: p.title, onClick: () => store.update(orbitPatch(p.yaw, p.pitch), 0) });
+    b.classList.add('orbit-preset');
+    return { p, b };
+  });
+  ui.bind(() => {
+    const o = currentOrbit(store.value.view);
+    for (const { p, b } of presets) toggleClass(b, 'active', Math.abs(o.yaw - p.yaw) < 0.5 && Math.abs(o.pitch - p.pitch) < 0.5);
+  });
+  const orbitRow = h('div', { class: 'orbit-row' },
+    orbitBall(store, ui),
+    h('div', { class: 'orbit-presets' }, presets.map((x) => x.b)));
+  const resetRow = h('div', { class: 'btn-row' },
+    button('Ansicht zurücksetzen', {
+      icon: 'refresh', small: true,
+      title: 'Orbit, Zoom und Versatz auf Standard (Ausschnitt, FOV und Licht bleiben)',
+      onClick: () => store.update(resetViewPatch(), 0),
+    }));
   const sec = section('view', 'Ansicht', 'eye', false,
     ui.segmented<ViewSettings['background']['mode']>({
       label: 'Hintergrund',
@@ -37,15 +62,31 @@ export function viewSection(ctx: AppContext): SectionModule {
       get: (s) => s.view.framing,
       set: (v) => ({ view: { framing: v } }),
     }),
+    orbitRow,
+    ui.slider({
+      label: 'Orbit horizontal',
+      hint: 'Kamera um den Avatar drehen, vom Zuschauer aus gesehen: negativ (L) = Kamera nach links, positiv (R) = nach rechts',
+      min: -180, max: 180, step: 1, format: fmtYaw,
+      get: (s) => currentOrbit(s.view).yaw,
+      set: (v) => orbitPatch(v, currentOrbit(store.value.view).pitch),
+    }),
+    ui.slider({
+      label: 'Orbit vertikal',
+      hint: 'Positiv = Kamera von oben, negativ = von unten',
+      min: ORBIT_PITCH_MIN, max: ORBIT_PITCH_MAX, step: 1, format: fmtPitch,
+      get: (s) => currentOrbit(s.view).pitch,
+      set: (v) => orbitPatch(currentOrbit(store.value.view).yaw, v),
+    }),
     ui.slider({
       label: 'Zoom',
-      min: 0.3, max: 3, step: 0.01, format: fmt.times,
+      hint: 'Auch mit dem Mausrad im Avatar-Fenster',
+      min: ZOOM_MIN, max: ZOOM_MAX, step: 0.01, format: fmt.times,
       get: (s) => s.view.cameraOffset.zoom,
       set: (v) => ({ view: { cameraOffset: { zoom: v } } }),
     }),
     ui.slider({
       label: 'Versatz X',
-      hint: 'Avatar horizontal verschieben',
+      hint: 'Avatar horizontal verschieben (auch: rechte oder mittlere Maustaste im Avatar-Fenster ziehen)',
       min: -1, max: 1, step: 0.01,
       get: (s) => s.view.cameraOffset.x,
       set: (v) => ({ view: { cameraOffset: { x: v } } }),
@@ -64,6 +105,8 @@ export function viewSection(ctx: AppContext): SectionModule {
       get: (s) => s.view.cameraFov,
       set: (v) => ({ view: { cameraFov: v } }),
     }),
+    resetRow,
+    hint('Maus im Avatar-Fenster: linke Taste ziehen = um den Avatar drehen, rechte/mittlere Taste ziehen = verschieben, Mausrad = Zoom, Doppelklick = Ansicht zurücksetzen.'),
     subhead('Licht'),
     ui.slider({
       label: 'Licht',

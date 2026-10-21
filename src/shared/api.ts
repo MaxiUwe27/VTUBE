@@ -19,6 +19,28 @@ export interface VcamStatus { running: boolean; device: string; error?: string; 
 export interface VideoDeviceInfo { path: string; label: string; loopback: boolean; busyBy: { pid: number; name: string }[] }
 export interface ModelFile { path: string; name: string; data: ArrayBuffer }
 
+/** Tracking input from a URL ("Browserquelle"): main renders the page offscreen and streams its frames. */
+export interface UrlSourceRequest {
+  /** Chosen by the renderer; echoed in every frame/status so stale ones can be ignored. */
+  id: number;
+  url: string;            // http(s) only (validated in main)
+  width: number;          // offscreen page size in px
+  height: number;
+  fps: number;            // max paint rate
+}
+export type UrlSourceState = 'loading' | 'connected' | 'reconnecting' | 'error';
+export interface UrlSourceStatus {
+  id: number;
+  state: UrlSourceState;
+  url: string;
+  /** German, user-facing (error reason, reconnect note). */
+  message?: string;
+  /** Unrecoverable (no retry in main, e.g. the URL triggers a download) → renderer gives up. */
+  fatal?: boolean;
+}
+/** One rendered page frame. `data` = BGRA (little-endian, alpha ignored), top-down, width*height*4 bytes. */
+export interface UrlSourceFrame { id: number; width: number; height: number; data: Uint8Array }
+
 export interface VtubeAPI {
   platform: string;
   getSettings(): Promise<Settings>;
@@ -44,6 +66,16 @@ export interface VtubeAPI {
   vcamFrame(rgba: ArrayBuffer): void;
   /** All /dev/videoN nodes (numerically sorted) with label, v4l2loopback flag and current users. */
   listVideoDevices(): Promise<VideoDeviceInfo[]>;
+
+  /** Start (or replace) the URL source. Rejects for invalid URLs (German message). Frames and status
+   *  arrive via onUrlSourceFrame/onUrlSourceStatus; main retries failed loads by itself. */
+  urlSourceStart(req: UrlSourceRequest): Promise<void>;
+  /** Stop and destroy the offscreen page (only if `id` is still the current source; no id = always). */
+  urlSourceStop(id?: number): Promise<void>;
+  /** Frames are flow-controlled: the preload acks each one after the callbacks ran, main drops frames
+   *  while two are unacknowledged. Returns an unsubscribe function. */
+  onUrlSourceFrame(cb: (f: UrlSourceFrame) => void): () => void;
+  onUrlSourceStatus(cb: (s: UrlSourceStatus) => void): () => void;
 
   openExternal(url: string): Promise<void>;
   copyToClipboard(text: string): void;
