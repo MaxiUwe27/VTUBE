@@ -29,8 +29,8 @@ Selbst bauen: `npm ci && npm run dist` → `release/VTube-Linux-<version>-x86_64
 
 ## OBS
 
-- **Browserquelle (empfohlen):** URL `http://127.0.0.1:39540/`, 1920×1080. Für Transparenz in der App
-  „Ansicht → Hintergrund → Transparent“ wählen, oder URL-Parameter `?bg=transparent` nutzen.
+- **Browserquelle (empfohlen):** URL `http://127.0.0.1:39540/`, 1920×1080. Der Hintergrund ist dort standardmäßig
+  transparent (unabhängig vom Grün im App-Fenster). Farbe erzwingen: `?bg=00ff00`, App-Einstellung übernehmen: `?bg=app`.
 - **Fenstererfassung + Chroma-Key:** Hintergrund Grün (Standard), Panel mit `Tab` ausblenden.
 - **Virtuelle Kamera** (für Discord etc.): siehe nächster Abschnitt.
 
@@ -78,6 +78,7 @@ v4l2loopback-Geräte mit Pfad, Name und benutzenden Prozessen und beendet sich s
 
 | Symptom | Lösung |
 |---|---|
+| OBS-Browserquelle / Browser-Test leer oder weiß | Die Seite zeigt oben links den Grund (keine Verbindung, kein Modell, WebGL fehlt …). „WebGL nicht verfügbar“ in OBS: *Einstellungen → Erweitert → Browserquellen-Hardwarebeschleunigung* an, OBS neu starten. Diagnose: URL mit `?debug`, `http://127.0.0.1:39540/status`, AppImage im Terminal starten (zeigt Verbindungen/Ablehnungen). `?nostatus` blendet die Hinweise aus |
 | Schwarzes Fenster / Absturz beim Start (GPU) | `./VTube-Linux…AppImage --disable-gpu` oder `--ozone-platform=x11` |
 | Tracking langsam | In „Kamera & Tracking“ GPU-Beschleunigung an/aus testen; 640×480 reicht völlig |
 | Avatar schaut schräg | Neu kalibrieren; „Spiegeln“ prüfen |

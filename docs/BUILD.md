@@ -39,7 +39,7 @@ Standard: natives Wayland wenn verfügbar (`ozone-platform-hint=auto`), GPU-Bloc
 
 ## OBS
 - **Browserquelle:** URL `http://127.0.0.1:39540/` (Port in den Einstellungen), Größe z.B. 1920×1080.
-  Der Server lauscht nur auf 127.0.0.1. Transparenz: Hintergrund-Modus „transparent“.
+  Der Server lauscht nur auf 127.0.0.1. Die Seite ist standardmäßig transparent (`?bg=00ff00` erzwingt eine Farbe, `?bg=app` übernimmt die App-Einstellung).
 - **Virtuelle Kamera** (v4l2loopback + ffmpeg): jedes Programm mit eigener virtueller Kamera braucht
   ein eigenes Gerät. Die virtuelle Kamera von OBS nimmt das erste freie v4l2loopback-Gerät (unabhängig vom
   Namen), deshalb zwei Geräte anlegen und OBS die kleinere Nummer geben:

@@ -52,7 +52,7 @@ const P_VIS = PROTOS.map((p) => VISEME_KEYS.map((k) => p.v[k] ?? 0));
 
 const TARGET_FS = 11000;       // ≈ decimated rate (Hz)
 const WIN_SEC = 0.03;          // analysis window
-const LPC_ORDER = 12;
+const MAX_ORDER = 16;
 const PRE_EMPHASIS = 0.97;
 const F0_MIN = 75, F0_MAX = 450;
 const REF_F0 = 120;            // F0 of the reference (male) speaker the prototypes are for
@@ -68,6 +68,7 @@ export interface AnalyzerDebug {
   f1: number;         // Hz (0 = none)
   f2: number;         // Hz (0 = none)
   scale: number;      // speaker formant scale factor
+  l21: number;
 }
 
 export class VowelAnalyzer {
@@ -79,11 +80,11 @@ export class VowelAnalyzer {
   private readonly hamming: Float64Array;
   private readonly y: Float64Array;     // decimated window
   private readonly e: Float64Array;     // pre-emphasized + windowed
-  private readonly r = new Float64Array(LPC_ORDER + 1);
-  private readonly a = new Float64Array(LPC_ORDER + 1);
-  private readonly aTmp = new Float64Array(LPC_ORDER + 1);
-  private readonly zr = new Float64Array(LPC_ORDER);
-  private readonly zi = new Float64Array(LPC_ORDER);
+  private readonly r = new Float64Array(MAX_ORDER + 1);
+  private readonly a = new Float64Array(MAX_ORDER + 1);
+  private readonly aTmp = new Float64Array(MAX_ORDER + 1);
+  private readonly zr = new Float64Array(MAX_ORDER);
+  private readonly zi = new Float64Array(MAX_ORDER);
   private rootsWarm = false;
   private readonly cf: number[] = [];   // formant candidates (Hz), ascending
   private readonly cb: number[] = [];   // their bandwidths (Hz)
@@ -101,12 +102,17 @@ export class VowelAnalyzer {
   readonly visemes: Record<VisemeKey, number> = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
   /** Smoothed vowel shape (sums to ~1), independent of loudness. */
   readonly shape: Record<VisemeKey, number> = { aa: 1, ih: 0, ou: 0, ee: 0, oh: 0 };
-  readonly debug: AnalyzerDebug = { level: 0, voicing: 0, f0: 0, f1: 0, f2: 0, scale: 1 };
+  readonly debug: AnalyzerDebug = { level: 0, voicing: 0, f0: 0, f1: 0, f2: 0, scale: 1, l21: 0 };
   private voicingS = 0;
 
-  constructor(sampleRate: number) {
+  private readonly order: number;
+  private readonly targetFs: number;
+
+  constructor(sampleRate: number, opts: { targetFs?: number; order?: number } = {}) {
     this.sampleRate = sampleRate;
-    this.D = Math.max(1, Math.floor(sampleRate / TARGET_FS + 0.25));
+    this.targetFs = opts.targetFs ?? TARGET_FS;
+    this.order = Math.min(MAX_ORDER, opts.order ?? 12);
+    this.D = Math.max(1, Math.floor(sampleRate / this.targetFs + 0.25));
     this.fsd = sampleRate / this.D;
     this.win = Math.round(WIN_SEC * this.fsd);
     // Windowed-sinc low-pass at ~0.42 * fsd (anti-alias for the decimation).
@@ -243,7 +249,7 @@ export class VowelAnalyzer {
 
   /** LPC formants of this.y → F1/F2 → vowel shape. */
   private formantsAndShape(dt: number, voicing: number): void {
-    const y = this.y, e = this.e, N = this.win, w = this.hamming, p = LPC_ORDER;
+    const y = this.y, e = this.e, N = this.win, w = this.hamming, p = this.order;
     e[0] = y[0] * w[0];
     for (let i = 1; i < N; i++) e[i] = (y[i] - PRE_EMPHASIS * y[i - 1]) * w[i];
     const r = this.r;
@@ -277,7 +283,7 @@ export class VowelAnalyzer {
     for (let i = 0; i < cf.length; i++) if (cf[i] >= 200 && cf[i] <= 1150 && cb[i] < 500) { i1 = i; break; }
     if (i1 < 0) return;
     let i2 = -1;
-    for (let i = i1 + 1; i < cf.length; i++) if (cf[i] >= Math.max(550, cf[i1] * 1.15) && cf[i] <= 3300 && cb[i] < 600) { i2 = i; break; }
+    for (let i = i1 + 1; i < cf.length; i++) if (cf[i] >= Math.max(400, cf[i1] + 80) && cf[i] <= 3300 && cb[i] < 600) { i2 = i; break; }
     if (i2 < 0) return;
     let f1 = cf[i1], f2 = cf[i2];
 
@@ -287,6 +293,7 @@ export class VowelAnalyzer {
     h1[this.histN % 3] = f1; h2[this.histN % 3] = f2; this.histN++;
     f1 = median3(h1[0], h1[1], h1[2]); f2 = median3(h2[0], h2[1], h2[2]);
     this.debug.f1 = f1; this.debug.f2 = f2;
+    this.debug.l21 = this.envDb(cf[i2]) - this.envDb(cf[i1]);
 
     // Speaker normalization (uniform log shift from running F0).
     const scale = Math.min(1.32, Math.max(0.95, Math.exp(SCALE_EXP * (this.lnF0 - Math.log(REF_F0)))));
@@ -315,9 +322,17 @@ export class VowelAnalyzer {
     }
   }
 
+  /** LPC envelope level (dB, arbitrary reference) at frequency f. */
+  private envDb(f: number): number {
+    const w = (2 * Math.PI * f) / this.fsd, a = this.a;
+    let re = 0, im = 0;
+    for (let k = 0; k <= this.order; k++) { re += a[k] * Math.cos(w * k); im -= a[k] * Math.sin(w * k); }
+    return -10 * Math.log10(re * re + im * im + 1e-30);
+  }
+
   /** Levinson-Durbin on this.r → this.a (a[0] = 1). */
   private levinson(): boolean {
-    const r = this.r, a = this.a, t = this.aTmp, p = LPC_ORDER;
+    const r = this.r, a = this.a, t = this.aTmp, p = this.order;
     a.fill(0); a[0] = 1;
     let err = r[0];
     for (let i = 1; i <= p; i++) {
@@ -336,7 +351,7 @@ export class VowelAnalyzer {
 
   /** Roots of z^p + a1 z^(p-1) + … + ap (Aberth-Ehrlich, warm-started from the previous frame). */
   private roots(): boolean {
-    const p = LPC_ORDER, a = this.a, zr = this.zr, zi = this.zi;
+    const p = this.order, a = this.a, zr = this.zr, zi = this.zi;
     if (!this.rootsWarm) {
       for (let i = 0; i < p; i++) {
         const ang = (2 * Math.PI * (i + 0.25)) / p + 0.4;

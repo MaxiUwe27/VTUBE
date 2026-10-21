@@ -1,8 +1,9 @@
 // OBS browser-source page: renders the avatar only, driven over WebSocket by the main process.
 //
 // URL query options:
-//   ?bg=transparent        force a transparent background
+//   (default)              transparent background – OBS composites the alpha channel
 //   ?bg=%2300ff00 / ?bg=00ff00   force a background colour
+//   ?bg=app                follow the app window's background setting
 //   ?debug                 show a small live status line (bottom left)
 //   ?nostatus              never show the status/error box (top left)
 //
@@ -278,9 +279,10 @@ window.addEventListener('beforeunload', () => {
 // ------------------------------------------------------------------ helpers
 
 function parseBgOverride(v: string | null): ViewSettings['background'] | null {
-  if (!v) return null;
-  const s = v.trim().toLowerCase();
-  if (s === 'transparent' || s === 'none' || s === 'alpha') {
+  const s = (v ?? '').trim().toLowerCase();
+  if (s === 'app') return null;
+  // The app window's chroma green is meant for window capture; a browser source is transparent.
+  if (!s || s === 'transparent' || s === 'none' || s === 'alpha') {
     return { mode: 'transparent', color: DEFAULT_SETTINGS.view.background.color };
   }
   const hex = s.startsWith('#') ? s.slice(1) : s;
