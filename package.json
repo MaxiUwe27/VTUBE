@@ -78,6 +78,16 @@
       },
       "syncDesktopName": true
     },
-    "publish": null
+    "publish": null,
+    "extraResources": [
+      {
+        "from": "LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.txt",
+        "to": "THIRD_PARTY_NOTICES.txt"
+      }
+    ]
   }
 }

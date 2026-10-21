@@ -20,6 +20,12 @@ chmod +x VTube-Linux-*-x86_64.AppImage
 ```
 Selbst bauen: `npm ci && npm run dist` → `release/VTube-Linux-<version>-x86_64.AppImage` (Details: [docs/BUILD.md](docs/BUILD.md)).
 
+### Weitergeben / andere Distributionen
+Das AppImage läuft auf jedem 64-Bit-Linux; es ist nicht auf einen bestimmten Avatar oder Rechner zugeschnitten.
+Zum Weitergeben einfach die Datei verschicken und [docs/FUER_FREUNDE.md](docs/FUER_FREUNDE.md) mitgeben.
+Ubuntu: `libfuse2` bzw. `libfuse2t64` nötig (oder `--appimage-extract-and-run`); ab Ubuntu 24.04 ggf. `--no-sandbox`
+(AppArmor sperrt die Chromium-Sandbox). Lizenz: MIT ([LICENSE](LICENSE)), Drittanbieter: [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+
 ## Erste Schritte
 
 1. App starten, Kamerazugriff wird automatisch erteilt.

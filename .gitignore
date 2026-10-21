@@ -4,3 +4,4 @@ dist-electron/
 release/
 src/renderer/public/mediapipe/wasm/
 *.log
+src/renderer/public/THIRD_PARTY_NOTICES.txt

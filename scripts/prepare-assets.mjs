@@ -17,4 +17,6 @@ if (!existsSync(model)) {
   if (!res.ok) throw new Error(`Model download failed: ${res.status}`);
   writeFileSync(model, Buffer.from(await res.arrayBuffer()));
 }
+// License notices shown under "Über & Hilfe" (also bundled as resources/THIRD_PARTY_NOTICES.txt).
+await import('./make-notices.mjs');
 console.log('Assets ready in', pub);
