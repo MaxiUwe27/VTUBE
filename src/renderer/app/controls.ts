@@ -32,9 +32,21 @@ export interface SelectOpts<T> extends BaseOpts<T> {
   missingLabel?(v: T): string;
   /** Extra element placed next to the select (e.g. refresh button). */
   extra?: HTMLElement;
+  /**
+   * When this returns a text, the select shows it (built from the current option's label) instead of
+   * the current option, so picking the SAME option again fires a change (e.g. retry a failed camera).
+   */
+  reselectLabel?(currentLabel: string): string | null;
 }
 
-export interface SelectHandle<T> { el: HTMLElement; setOptions(opts: Opt<T>[]): void }
+export interface SelectHandle<T> {
+  el: HTMLElement;
+  setOptions(opts: Opt<T>[]): void;
+  /** Re-evaluate reselectLabel / current value (call when outside state changed). */
+  refresh(): void;
+}
+
+const RESELECT_KEY = '\u0000reselect';
 
 const keyOf = (v: unknown): string => (v === null || v === undefined ? '' : String(v));
 
@@ -141,9 +153,21 @@ export class Controls {
     const id = nextId('se');
     const sel = h('select', { id, class: 'select' });
     let options = o.options;
+    let reselect: string | null = null;
+    const currentLabel = (): string => {
+      const v = o.get(this.store.value);
+      const opt = options.find((x) => keyOf(x.value) === keyOf(v));
+      return opt ? opt.label : o.missingLabel ? o.missingLabel(v) : String(v);
+    };
+    const wanted = () => (reselect !== null ? RESELECT_KEY : keyOf(o.get(this.store.value)));
     const render = () => {
       const cur = keyOf(o.get(this.store.value));
+      reselect = o.reselectLabel ? o.reselectLabel(currentLabel()) : null;
       sel.textContent = '';
+      if (reselect !== null) {
+        // Shown in the closed select only (hidden in the list), so every list entry is a change.
+        sel.appendChild(h('option', { value: RESELECT_KEY, disabled: true, hidden: true }, reselect));
+      }
       for (const opt of options) {
         sel.appendChild(h('option', { value: keyOf(opt.value), title: opt.title }, opt.label));
       }
@@ -151,27 +175,33 @@ export class Controls {
         const v = o.get(this.store.value);
         sel.appendChild(h('option', { value: cur }, o.missingLabel ? o.missingLabel(v) : String(v)));
       }
-      sel.value = cur;
+      sel.value = wanted();
     };
     sel.addEventListener('change', () => {
       const opt = options.find((x) => keyOf(x.value) === sel.value);
       if (opt) this.store.update(o.set(opt.value), o.persistDelay ?? 0);
+      else if (sel.value === keyOf(o.get(this.store.value))) {
+        // Re-picked the stored (missing) entry: emit the same value again so listeners can react.
+        this.store.update(o.set(o.get(this.store.value)), o.persistDelay ?? 0);
+      }
     });
     const row = h('div', { class: 'ctl ctl-select' }, labelEl(o.label, o.hint, id),
       h('div', { class: 'select-wrap' }, sel, o.extra ?? null));
-    this.bind(() => {
-      const cur = keyOf(o.get(this.store.value));
-      if (sel.value !== cur || sel.options.length === 0) render();
+    const refresh = () => {
+      const want = o.reselectLabel ? o.reselectLabel(currentLabel()) : null;
+      if (sel.value !== wanted() || want !== reselect || sel.options.length === 0) render();
       const en = this.isEnabled(o);
       sel.disabled = !en;
       toggleClass(row, 'disabled', !en);
-    });
+    };
+    this.bind(refresh);
     return {
       el: row,
       setOptions: (opts) => {
         options = opts;
         render();
       },
+      refresh,
     };
   }
 

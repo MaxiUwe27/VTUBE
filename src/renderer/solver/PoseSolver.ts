@@ -76,6 +76,9 @@ export class PoseSolver {
   // Model / perfect sync
   private psNames: string[] = ARKIT_NAMES.slice();
   private modelHasPs = false;
+  // Which blink expressions the model has (no model → assume all, the renderer ignores missing ones).
+  private hasBlink = true;
+  private hasBlinkLR = true;
 
   // Filters (camera rate)
   private rotF = [new OneEuroFilter(), new OneEuroFilter(), new OneEuroFilter()];
@@ -161,7 +164,10 @@ export class PoseSolver {
 
     if (t.calibration !== this.settingsCalibRef) {
       this.settingsCalibRef = t.calibration;
-      this.applyCalibration(t.calibration);
+      // A malformed stored calibration (hand-edited / older settings.json) is ignored, never fatal.
+      const cal = validCalibration(t.calibration);
+      if (t.calibration && !cal) console.warn('[PoseSolver] ignoring invalid calibration in settings', t.calibration);
+      this.applyCalibration(cal);
     }
   }
 
@@ -170,6 +176,8 @@ export class PoseSolver {
     const lower = new Map<string, string>();
     for (const n of info?.expressionNames ?? []) lower.set(n.toLowerCase(), n);
     this.psNames = ARKIT_NAMES.map((n) => lower.get(n.toLowerCase()) ?? n);
+    this.hasBlink = !info || lower.has('blink');
+    this.hasBlinkLR = !info || (lower.has('blinkleft') && lower.has('blinkright'));
   }
 
   pushFace(f: FaceFrame): void {
@@ -348,16 +356,36 @@ export class PoseSolver {
       // ── Blinks ── (mirror: the user's left eye drives the avatar's right eye)
       const userL = clamp01(bl * blinkDamp + idle), userR = clamp01(br * blinkDamp + idle);
       const avL = mirror ? userR : userL, avR = mirror ? userL : userR;
-      // Shared part through "blink", the remainder through blinkLeft/Right: identical sum, but uses the
-      // model's (often nicer) both-eyes blink and avoids double closing on models with all three.
-      const common = Math.min(avL, avR);
-      expressions.blink = common;
-      expressions.blinkLeft = avL - common;
-      expressions.blinkRight = avR - common;
+      if (this.hasBlink && this.hasBlinkLR) {
+        // Shared part through "blink", the remainder through blinkLeft/Right: identical sum, but uses the
+        // model's (often nicer) both-eyes blink and avoids double closing on models with all three.
+        const common = Math.min(avL, avR);
+        expressions.blink = common;
+        expressions.blinkLeft = avL - common;
+        expressions.blinkRight = avR - common;
+      } else if (this.hasBlink) {
+        // Only a combined blink: no winks possible – close both eyes as far as the more closed one.
+        expressions.blink = Math.max(avL, avR);
+        expressions.blinkLeft = expressions.blinkRight = 0;
+      } else {
+        // No combined blink: the per-eye expressions carry the full closure.
+        expressions.blink = 0;
+        expressions.blinkLeft = avL;
+        expressions.blinkRight = avR;
+      }
 
       // ── Mouth ──
       let aa = ce.aa * camW, ih = ce.ih * camW, ou = ce.ou * camW, ee = ce.ee * camW, oh = ce.oh * camW;
-      if (A && audW > 0) {
+      if (A && audW > 0 && viseme) {
+        // While audio is active, keep the camera's mouth openness but give it the audio vowel shape
+        // (share m·g); otherwise the camera's mostly-aa/ih shape would dilute the audio vowel.
+        const aSum = A.aa + A.ih + A.ou + A.ee + A.oh;
+        const r = aSum > 0.05 ? clamp01(this.l.mix) * smoothstep(viseme.volume, 0.02, 0.12) : 0;
+        if (r > 0) {
+          const camOpen = Math.min(1, aa + ih + ou + ee + oh) * r / aSum, keep = 1 - r;
+          aa = aa * keep + camOpen * A.aa; ih = ih * keep + camOpen * A.ih; ou = ou * keep + camOpen * A.ou;
+          ee = ee * keep + camOpen * A.ee; oh = oh * keep + camOpen * A.oh;
+        }
         aa = Math.max(aa, A.aa * audW); ih = Math.max(ih, A.ih * audW); ou = Math.max(ou, A.ou * audW);
         ee = Math.max(ee, A.ee * audW); oh = Math.max(oh, A.oh * audW);
       }
@@ -494,4 +522,18 @@ export class PoseSolver {
 function userQuat(pitch: number, yaw: number, roll: number, e: Euler, out: Quaternion): Quaternion {
   e.set(-pitch, yaw, -roll, EULER_ORDER);
   return out.setFromEuler(e);
+}
+
+const isVec3 = (v: unknown): v is Vec3 =>
+  !!v && typeof v === 'object' &&
+  Number.isFinite((v as Vec3).x) && Number.isFinite((v as Vec3).y) && Number.isFinite((v as Vec3).z);
+
+/** The calibration if it has the expected shape (head pose required, blendshapes optional), else null. */
+export function validCalibration(c: unknown): Calibration | null {
+  if (!c || typeof c !== 'object') return null;
+  const cal = c as Partial<Calibration>;
+  if (!isVec3(cal.headRotation) || !isVec3(cal.headPosition)) return null;
+  const bs = cal.blendshapes;
+  if (bs !== undefined && bs !== null && (typeof bs !== 'object' || Array.isArray(bs))) return null;
+  return cal as Calibration;
 }

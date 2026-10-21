@@ -7,7 +7,7 @@
 // converts automatically, so the solver never needs to know the model version.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { VRM, VRMLoaderPlugin, VRMUtils, type VRMHumanBoneName } from '@pixiv/three-vrm';
+import { VRM, VRMLoaderPlugin, VRMLookAtBoneApplier, VRMUtils, type VRMHumanBoneName, type VRMLookAtRangeMap } from '@pixiv/three-vrm';
 import type { AvatarPose, HumanBone, VrmInfo } from '../../shared/types';
 import type { ViewSettings } from '../../shared/settings';
 import { DEFAULT_SETTINGS, mergeSettings } from '../../shared/settings';
@@ -33,6 +33,16 @@ const AMBIENT_SCALE = 0.5 / 0.6;
 /** Smoothing rate (1/s) for bone/gaze interpolation between tracking frames. */
 const BONE_RATE = 28;
 const MAX_DT = 1 / 20;
+
+/** AvatarPose.lookAt is the intended eye rotation in degrees; the solver's natural maximum (eyes
+ *  fully to the side / up / down) is mapped onto the full range of the model's lookAt range maps
+ *  (their inputMaxValue, usually 90°), otherwise eyes would only reach about a third of their range. */
+const GAZE_FULL_YAW_DEG = 30;
+const GAZE_FULL_PITCH_DEG = 25;
+
+/** If rAF does not fire within this many frame intervals, render by timer until it resumes
+ *  (e.g. KWin stops frame callbacks for minimized windows while visibilityState stays 'visible'). */
+const RAF_STALL_FRAMES = 2.5;
 
 interface ManagedBone {
   name: VRMHumanBoneName;
@@ -62,6 +72,7 @@ interface LoadedModel {
 }
 
 const _q = new THREE.Quaternion();
+const _poseQ = new Map<HumanBone, THREE.Quaternion>(TRACKED_BONES.map((b) => [b, new THREE.Quaternion()]));
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _box = new THREE.Box3();
@@ -99,6 +110,8 @@ export class AvatarRenderer {
   private running = false;
   private rafId = 0;
   private timerId: ReturnType<typeof setTimeout> | 0 = 0;
+  private rafStalled = false;
+  private rafRequestedAt = 0;
   private lastTickMs = 0;
   private lastRenderMs = 0;
   private fpsFrames = 0;
@@ -281,6 +294,7 @@ export class AvatarRenderer {
     if (this.timerId) clearTimeout(this.timerId);
     this.rafId = 0;
     this.timerId = 0;
+    this.rafStalled = false;
     this._fps = 0;
   }
 
@@ -334,18 +348,48 @@ export class AvatarRenderer {
   private schedule(): void {
     if (!this.running) return;
     const hidden = hasDocument() && document.visibilityState === 'hidden';
+    const interval = 1000 / Math.max(1, this.view.targetFps || 60);
     if (hidden || typeof requestAnimationFrame === 'undefined') {
       // rAF may be paused for hidden windows; keep rendering for OBS / virtual camera.
-      const interval = 1000 / Math.max(1, this.view.targetFps || 60);
-      this.timerId = setTimeout(this.tick, Math.max(4, interval));
-    } else {
-      this.rafId = requestAnimationFrame(this.tick);
+      if (this.timerId) clearTimeout(this.timerId);
+      this.timerId = setTimeout(this.onTimer, Math.max(4, interval));
+      return;
     }
+    // rAF drives the loop; a watchdog timer takes over while rAF is stalled although the page is
+    // 'visible' (minimized on Wayland). At most one rAF stays pending, so when rAF resumes it takes
+    // back over; the FPS limiter in tick() prevents double frames at the hand-over.
+    if (!this.rafId) {
+      this.rafId = requestAnimationFrame(this.onRaf);
+      this.rafRequestedAt = performance.now();
+    }
+    if (this.timerId) clearTimeout(this.timerId);
+    this.timerId = setTimeout(this.onTimer,
+      this.rafStalled ? Math.max(4, interval) : Math.max(50, RAF_STALL_FRAMES * interval));
   }
 
-  private readonly tick = (): void => {
+  private readonly onRaf = (): void => {
     this.rafId = 0;
+    this.rafStalled = false;
+    if (this.timerId) clearTimeout(this.timerId);
     this.timerId = 0;
+    this.tick();
+  };
+
+  private readonly onTimer = (): void => {
+    this.timerId = 0;
+    // Visible page but no rAF for a while → keep rendering by timer until rAF fires again.
+    if (this.rafId) {
+      this.rafStalled = true;
+      // Re-request now and then in case that callback got lost for good.
+      if (performance.now() - this.rafRequestedAt > 1000) {
+        cancelAnimationFrame(this.rafId);
+        this.rafId = 0;
+      }
+    }
+    this.tick();
+  };
+
+  private readonly tick = (): void => {
     if (!this.running) return;
     const now = performance.now();
     const target = Math.max(1, this.view.targetFps || 60);
@@ -444,16 +488,27 @@ export class AvatarRenderer {
     // Tracked bones.
     const bones = pose.bones || {};
     for (const b of TRACKED_BONES) {
-      const mb = m.boneByName.get(b);
-      if (!mb) continue;
+      const t = _poseQ.get(b)!;
       const q = bones[b];
       if (q && isFinite(q.x) && isFinite(q.y) && isFinite(q.z) && isFinite(q.w)) {
-        mb.target.set(q.x, q.y, q.z, q.w);
-        if (mb.target.lengthSq() < 1e-8) mb.target.identity();
-        else mb.target.normalize();
+        t.set(q.x, q.y, q.z, q.w);
+        if (t.lengthSq() < 1e-8) t.identity();
+        else t.normalize();
       } else {
-        mb.target.identity();
+        t.identity();
       }
+    }
+    // Optional bones the model lacks (VRM1: neck, chest, upperChest) pass their rotation on to the
+    // neighbouring bone of the chain, so the total rotation is kept (all normalized rest rotations
+    // are identity, so parent·child composes directly):
+    //   chest → spine (spine·chest), upperChest → chest or spine (·upperChest), neck → head (neck·head).
+    const has = (b: HumanBone) => m.boneByName.has(b);
+    if (!has('chest')) _poseQ.get('spine')!.multiply(_poseQ.get('chest')!);
+    if (!has('upperChest')) _poseQ.get(has('chest') ? 'chest' : 'spine')!.multiply(_poseQ.get('upperChest')!);
+    if (!has('neck')) _poseQ.get('head')!.premultiply(_poseQ.get('neck')!);
+    for (const b of TRACKED_BONES) {
+      const mb = m.boneByName.get(b);
+      if (mb) mb.target.copy(_poseQ.get(b)!).normalize();
     }
 
     const o = pose.hipsOffset;
@@ -514,8 +569,17 @@ export class AvatarRenderer {
     this.gaze.pitch += (m.gazeTarget.pitch - this.gaze.pitch) * alpha;
     // VRMLookAt: yaw > 0 = looks to its own left (same as AvatarPose), but pitch > 0 = DOWN
     // (see three-vrm VRMLookAtExpressionApplier: pitch < 0 -> "lookUp"), so negate.
-    la.yaw = this.gaze.yaw;
-    la.pitch = -this.gaze.pitch;
+    // Scale so the solver's full gaze reaches the model's full range (see GAZE_FULL_*). The range map
+    // three-vrm actually uses per direction differs between the bone and the expression applier.
+    const ap = la.applier as Partial<Record<'rangeMapHorizontalOuter' | 'rangeMapVerticalUp' | 'rangeMapVerticalDown', VRMLookAtRangeMap>>;
+    const bone = la.applier instanceof VRMLookAtBoneApplier;
+    const yaw = this.gaze.yaw;
+    const pitch = -this.gaze.pitch;
+    const pitchMap = pitch < 0
+      ? (bone ? ap.rangeMapVerticalDown : ap.rangeMapVerticalUp)   // looking up
+      : (bone ? ap.rangeMapVerticalUp : ap.rangeMapVerticalDown);  // looking down
+    la.yaw = yaw * gazeScale(ap.rangeMapHorizontalOuter, GAZE_FULL_YAW_DEG);
+    la.pitch = pitch * gazeScale(pitchMap, GAZE_FULL_PITCH_DEG);
   }
 
   // ---------------------------------------------------------------- model setup
@@ -681,6 +745,7 @@ export class AvatarRenderer {
     if (this.timerId) clearTimeout(this.timerId);
     this.rafId = 0;
     this.timerId = 0;
+    this.rafStalled = false;
     this.schedule();
   };
 
@@ -710,6 +775,12 @@ function disposeObject(obj: THREE.Object3D): void {
 /** Deep copy of plain JSON data (structuredClone needs Chromium 98+; OBS ships older CEF builds). */
 function cloneJson<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
+}
+
+/** Factor that maps `fullDeg` of intended eye rotation onto the range map's input maximum. */
+function gazeScale(map: VRMLookAtRangeMap | undefined, fullDeg: number): number {
+  const max = map?.inputMaxValue;
+  return typeof max === 'number' && isFinite(max) && max > 0 ? max / fullDeg : 1;
 }
 
 function safeColor(c: string | undefined, fallback: string): string {

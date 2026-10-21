@@ -1,6 +1,6 @@
 // 4. Mimik & Emotionen: sensitivities, emotions, Perfect Sync, live expression meters.
 
-import type { EmotionKey } from '../../../shared/settings';
+import type { EmotionKey, Settings } from '../../../shared/settings';
 import type { AppContext, SectionModule } from '../context';
 import { fmt, hint, meter, section, subhead } from '../controls';
 import { h, toggleClass } from '../dom';
@@ -16,7 +16,12 @@ const EMOTIONS: { key: EmotionKey; label: string }[] = [
 const METER_ROWS = 12;
 
 export function expressionsSection(ctx: AppContext): SectionModule {
-  const { ui, live } = ctx;
+  const { ui, live, store } = ctx;
+
+  /** Perfect sync active: the solver drives ARKit shapes directly and zeroes the preset emotions. */
+  const psActive = (s: Settings) => !!live.model?.info.hasPerfectSync && s.tracking.usePerfectSync;
+  const emoNote = hint('Bei Perfect Sync steuert das Gesicht die ARKit-Blendshapes direkt – automatische Emotionen sind dann aus.');
+  ui.bind(() => toggleClass(emoNote, 'hidden', !psActive(store.value)));
 
   const psNote = hint('');
   const updatePsNote = () => {
@@ -27,7 +32,10 @@ export function expressionsSection(ctx: AppContext): SectionModule {
         ? 'Dieses Modell unterstützt Perfect Sync – feinere Mimik möglich.'
         : 'Dieses Modell hat keine Perfect-Sync-Blendshapes – es werden die VRM-Standardausdrücke genutzt.';
   };
-  ctx.on('model', updatePsNote);
+  ctx.on('model', () => {
+    updatePsNote();
+    ui.refreshAll(); // re-evaluate the emotion controls (enabled state depends on the model)
+  });
   updatePsNote();
 
   const meters = Array.from({ length: METER_ROWS }, () => meter(''));
@@ -71,11 +79,13 @@ export function expressionsSection(ctx: AppContext): SectionModule {
     }),
     psNote,
     subhead('Emotionen'),
+    emoNote,
     ui.toggle({
       label: 'Automatische Emotionen',
       hint: 'Fröhlich, wütend, traurig … aus dem Gesichtsausdruck ableiten',
       get: (s) => s.tracking.autoEmotions,
       set: (v) => ({ tracking: { autoEmotions: v } }),
+      enabled: (s) => !psActive(s),
     }),
     EMOTIONS.map((e) => ui.slider({
       label: e.label,
@@ -83,7 +93,7 @@ export function expressionsSection(ctx: AppContext): SectionModule {
       min: 0, max: 2, step: 0.05, format: fmt.times,
       get: (s) => s.tracking.emotionSensitivity[e.key],
       set: (v) => ({ tracking: { emotionSensitivity: { [e.key]: v } } }),
-      enabled: (s) => s.tracking.autoEmotions,
+      enabled: (s) => s.tracking.autoEmotions && !psActive(s),
     })),
     subhead('Live-Werte'),
     hint('Die aktuell stärksten Ausdrücke des Avatars – hilfreich beim Feinjustieren.'),

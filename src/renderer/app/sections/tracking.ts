@@ -19,6 +19,8 @@ export function trackingSection(ctx: AppContext): SectionModule {
     set: (v) => ({ camera: { deviceId: v } }),
     missingLabel: () => 'Gespeicherte Kamera (nicht gefunden)',
     extra: refreshBtn,
+    // After a failure, picking the same camera again restarts the tracking.
+    reselectLabel: (cur) => (live.tracker.state === 'error' && store.value.tracking.enabled ? `${cur} – erneut wählen zum Neustart` : null),
   });
 
   async function loadCameras(manual = false): Promise<void> {
@@ -53,7 +55,12 @@ export function trackingSection(ctx: AppContext): SectionModule {
     { key: 'fps', label: 'Tracking-FPS' },
     { key: 'delegate', label: 'Berechnung' },
   ]);
-  const errorBox = h('div', { class: 'alert alert-error hidden' });
+  const errorText = h('div', { class: 'alert-text' });
+  const retryBtn = button('Erneut versuchen', {
+    icon: 'refresh', small: true, title: 'Kamera und Tracking neu starten',
+    onClick: () => actions.restartTracker(),
+  });
+  const errorBox = h('div', { class: 'alert alert-error hidden' }, errorText, h('div', { class: 'btn-row' }, retryBtn));
 
   // --- Preview -------------------------------------------------------------------------------
   const overlay = h('canvas', { class: 'preview-overlay' });
@@ -147,8 +154,9 @@ export function trackingSection(ctx: AppContext): SectionModule {
     const label = { off: 'Aus', starting: 'Startet…', running: 'Läuft', error: 'Fehler' }[t.state];
     const dot = { off: 'off', starting: 'warn', running: 'ok', error: 'error' }[t.state] as 'ok';
     status.set('state', h('span', { class: 'with-dot' }, statusDot(dot), label));
-    errorBox.textContent = t.error ?? '';
+    errorText.textContent = t.error ?? '';
     toggleClass(errorBox, 'hidden', !(t.state === 'error' && t.error));
+    camSelect.refresh();
     toggleClass(preview, 'off', t.state !== 'running');
     previewPlaceholder.textContent = t.state === 'starting' ? 'Kamera wird gestartet…' : t.state === 'error' ? 'Kein Kamerabild' : 'Kamera ist aus';
     status.set('delegate', t.state !== 'running' ? '–'

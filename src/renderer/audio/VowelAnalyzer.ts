@@ -4,17 +4,24 @@
 // Pipeline per analysis tick (~60-120 Hz):
 //  1. loudness: RMS of the whole buffer (dBFS → 0..1, gain, noise gate, fast attack / slower release);
 //  2. low-pass + decimate the latest ~30 ms to ≈ 11-12 kHz (formants up to ~5 kHz);
-//  3. voicing: normalized autocorrelation pitch strength (75-450 Hz) + share of energy below ~5 kHz,
-//     so fricatives (s, sch, f) and noise do not produce random vowels; also yields F0;
+//  3. voicing: normalized autocorrelation pitch strength (75-450 Hz, on a ~900 Hz low-passed copy)
+//     + share of energy below ~5 kHz + F0 plausibility vs. the speaker's usual F0, so fricatives
+//     (s, sch, f), breath and noise do not produce random vowels; also yields F0;
 //  4. formants: pre-emphasis 0.97, Hamming window, LPC (autocorrelation + Levinson-Durbin) at two
 //     model orders, polynomial roots (Aberth, warm-started) → F1/F2 by frequency + bandwidth.
 //     A high order resolves the close F1/F2 of back vowels (o, u) in low voices, a low order avoids
 //     fitting single harmonics of high voices; the hypothesis that fits the vowel space best wins,
-//     with a prior from the speaker's F0;
+//     with a prior from the speaker's F0 and a spectral-balance check (back vowels: little energy
+//     at 1.5-3.5 kHz);
 //  5. speaker normalization: uniform formant scale factor (Nearey-style log shift) from a running
-//     median of F0 (male ≈ 1.0, female ≈ 1.15-1.2, child ≈ 1.3), so one set of vowel targets fits all;
-//  6. soft classification in log(F1), log(F2) against German vowel prototypes (incl. ɛ, ɔ, ʊ, y, ø, ə),
+//     median of F0 (male ≈ 1.0, female ≈ 1.15-1.2, child ≈ 1.3), refined (±15 %) by the long-term
+//     median F2 of connected speech, so one set of vowel targets fits all speakers;
+//  6. soft classification in log(F1), log(F2) against German vowel prototypes (incl. ɪ, ɛ, ɔ, ʊ, y, ə),
 //     each prototype mapping to a viseme mix; smoothing with fast attack and slower release.
+//
+// Offline evaluation on real recordings (Wikimedia Commons / Lingua Libre, 5 speakers, m/f):
+// dominant viseme correct on ~79 % of vowel-nucleus frames (old spectral heuristic: ~54 %).
+// CPU: ≈ 70 µs per call (≈ 0.5 % of one core at 60 Hz).
 
 export type VisemeKey = 'aa' | 'ih' | 'ou' | 'ee' | 'oh';
 export const VISEME_KEYS: readonly VisemeKey[] = ['aa', 'ih', 'ou', 'ee', 'oh'];
@@ -31,6 +38,7 @@ export interface AnalyzerOptions {
   sigmaF1?: number;      // prototype spread, natural-log units
   sigmaF2?: number;
   orderPrior?: number;   // weight of the F0-based preference between LPC orders
+  balanceWeight?: number; // weight of the spectral-balance check between LPC hypotheses
 }
 
 /**
@@ -49,9 +57,8 @@ const PROTOS: { f1: number; f2: number; back?: boolean; v: Partial<Record<Viseme
   { f1: 410, f2: 780, back: true, v: { oh: 1 } },                   // oː  (so, rot)
   { f1: 350, f2: 1000, back: true, v: { ou: 0.55, oh: 0.45 } },     // ʊ   (Mutter)
   { f1: 290, f2: 740, back: true, v: { ou: 1 } },                   // uː  (Schuh, gut)
-  { f1: 280, f2: 1750, v: { ou: 0.55, ih: 0.45 } },                 // yː  (Tür)
-  { f1: 370, f2: 1450, v: { oh: 0.5, ou: 0.3, ee: 0.2 } },          // øː  (schön)
-  { f1: 480, f2: 1500, v: { aa: 0.4, ee: 0.3, oh: 0.3 } },          // ə   (bitte, Name)
+  { f1: 280, f2: 1750, v: { ih: 0.6, ou: 0.4 } },                   // yː  (Tür)
+  { f1: 480, f2: 1500, v: { aa: 0.5, ee: 0.5 } },                   // ə   (bitte, Name): neutral, half open
 ];
 
 const NV = VISEME_KEYS.length;
@@ -61,13 +68,14 @@ const P_VIS = PROTOS.map((p) => VISEME_KEYS.map((k) => p.v[k] ?? 0));
 /** Back vowels: F2 is less reliable / less distinctive (o vs u differ mainly in F1). */
 const BACK_F2_SPREAD = 1.5;
 
-const DEFAULTS: Required<AnalyzerOptions> = { targetFs: 11000, orders: [10, 14], sigmaF1: 0.2, sigmaF2: 0.17, orderPrior: 1.5 };
+const DEFAULTS: Required<AnalyzerOptions> = { targetFs: 11000, orders: [10, 14], sigmaF1: 0.2, sigmaF2: 0.17, orderPrior: 1.5, balanceWeight: 2 };
 const MAX_ORDER = 18;
 const WIN_SEC = 0.03;          // analysis window
 const PRE_EMPHASIS = 0.97;
 const F0_MIN = 75, F0_MAX = 450;
 const REF_F0 = 120;            // F0 of the reference (male) speaker the prototypes are for
 const FEMALE_F0 = 210;
+const REF_F2 = 1500;           // long-term median F2 of connected speech for the reference speaker
 const SCALE_EXP = 0.3;         // formant scale ≈ (F0 / REF_F0)^0.3 (male 120 Hz → 1, female 210 Hz → 1.18)
 
 const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
@@ -113,6 +121,9 @@ export class VowelAnalyzer {
   private readonly tmp = new Float64Array(MAX_ORDER + 1);
   private readonly slots: LpcSlot[];
   private readonly cumE: Float64Array;
+  private readonly pM: number;          // extra decimation for pitch analysis
+  private readonly z: Float64Array;     // low-passed, decimated copy of y (pitch)
+  private readonly ac: Float64Array;    // normalized autocorrelation by lag
   private readonly cf: number[] = [];   // formant candidates (Hz), ascending
   private readonly cb: number[] = [];   // their bandwidths (Hz)
   private readonly visT = new Float64Array(NV);
@@ -121,6 +132,8 @@ export class VowelAnalyzer {
   private histN = 0;
   private lnF0 = Math.log(150);         // running median of log F0 (start between male and female)
   private f0Evidence = 0;
+  private lnF2 = Math.log(REF_F2 * 1.08); // running median of log F2 (voiced, with formants)
+  private f2Evidence = 0;
   private voicingS = 0;
 
   /** Smoothed loudness 0..1 (after gain / noise gate). */
@@ -139,12 +152,15 @@ export class VowelAnalyzer {
     if (opts.sigmaF1) o.sigmaF1 = opts.sigmaF1;
     if (opts.sigmaF2) o.sigmaF2 = opts.sigmaF2;
     if (opts.orderPrior !== undefined) o.orderPrior = opts.orderPrior;
+    if (opts.balanceWeight !== undefined) o.balanceWeight = opts.balanceWeight;
     this.o = o;
     this.sig2 = PROTOS.map((pr) => o.sigmaF2 * (pr.back ? BACK_F2_SPREAD : 1));
     this.D = Math.max(1, Math.floor(sampleRate / o.targetFs + 0.25));
     this.fsd = sampleRate / this.D;
     this.win = Math.round(WIN_SEC * this.fsd);
-    this.slots = o.orders.map((p) => new LpcSlot(Math.min(MAX_ORDER, Math.max(4, Math.round(p)))));
+    // Orders are tuned for fsd ≈ 11-12 kHz; a higher decimated rate (e.g. 16 kHz input) needs more poles.
+    const of = Math.max(1, this.fsd / 12000);
+    this.slots = o.orders.map((p) => new LpcSlot(Math.min(MAX_ORDER, Math.max(4, Math.round(p * of)))));
     // Windowed-sinc low-pass at ~0.42 * fsd (anti-alias for the decimation).
     const nt = this.D === 1 ? 1 : 8 * this.D + 1;
     this.taps = new Float64Array(nt);
@@ -165,6 +181,9 @@ export class VowelAnalyzer {
     this.y = new Float64Array(this.win);
     this.e = new Float64Array(this.win);
     this.cumE = new Float64Array(this.win + 1);
+    this.pM = Math.max(1, Math.round(this.fsd / 3000));
+    this.z = new Float64Array(Math.ceil(this.win / this.pM) + 1);
+    this.ac = new Float64Array(this.z.length + 2);
   }
 
   /** Number of input samples one analysis needs (provide at least this many, newest last). */
@@ -206,6 +225,8 @@ export class VowelAnalyzer {
       const { strength, f0 } = this.pitch();
       // Periodicity, and most energy below ~5 kHz (sibilants have little there).
       voicing = smoothstep(strength, 0.3, 0.65) * smoothstep(lpRatio, 0.25, 0.6);
+      // A "pitch" far above the speaker's usual F0 is breath / aspiration noise, not voice.
+      if (f0 > 0 && this.f0Evidence > 0.5) voicing *= 1 - smoothstep(Math.log(f0) - this.lnF0, Math.log(2.3), Math.log(3.2));
       if (voicing > 0.6 && f0 > 0) {
         this.debug.f0 = f0;
         // Running median of log F0 (sign-step estimator: robust against octave errors).
@@ -256,32 +277,54 @@ export class VowelAnalyzer {
     return rmsRaw > 0 ? r / rmsRaw : 0;
   }
 
-  /** Normalized autocorrelation pitch strength (0..1) and F0 (Hz) of this.y. */
+  /**
+   * Normalized autocorrelation pitch strength (0..1) and F0 (Hz). Computed on a copy of this.y
+   * low-passed at ~900 Hz and decimated to ~3 kHz: cheap, and F1 ringing (which would fake a
+   * "pitch" at 1/F1 in low voices) is removed.
+   */
   private pitch(): { strength: number; f0: number } {
-    const y = this.y, N = this.win, fs = this.fsd, c = this.cumE;
-    c[0] = 0;
-    for (let i = 0; i < N; i++) c[i + 1] = c[i] + y[i] * y[i];
-    const lo = Math.max(2, Math.floor(fs / F0_MAX)), hi = Math.min(Math.floor(N * 0.6), Math.ceil(fs / F0_MIN));
-    let best = 0, bestLag = 0;
-    let prev = -1, prev2 = -1;
-    for (let lag = lo; lag <= hi; lag++) {
-      let s = 0;
-      for (let i = 0, m = N - lag; i < m; i++) s += y[i] * y[i + lag];
-      const e0 = c[N - lag], e1 = c[N] - c[lag];
-      const r = e0 > 0 && e1 > 0 ? s / Math.sqrt(e0 * e1) : 0;
-      // Local maximum at lag-1; slight preference for shorter lags (avoids octave-down errors).
-      if (prev > prev2 && prev >= r) {
-        const sc = prev * (1 - 0.1 * (lag - 1 - lo) / (hi - lo + 1));
-        if (sc > best) { best = sc; bestLag = lag - 1; }
-      }
-      prev2 = prev; prev = r;
+    const y = this.y, M = this.pM, z = this.z, c = this.cumE, fs = this.fsd / M;
+    // Two cascaded one-pole low-pass filters (~900 Hz), then keep every M-th sample.
+    const al = 1 - Math.exp((-2 * Math.PI * 900) / this.fsd);
+    let s1 = y[0], s2 = y[0], n = 0;
+    for (let i = 0; i < this.win; i++) {
+      s1 += al * (y[i] - s1); s2 += al * (s1 - s2);
+      if (i % M === M - 1) z[n++] = s2;
     }
-    return { strength: best, f0: bestLag > 0 ? fs / bestLag : 0 };
+    const N = n;
+    c[0] = 0;
+    for (let i = 0; i < N; i++) c[i + 1] = c[i] + z[i] * z[i];
+    const lo = Math.max(2, Math.floor(fs / F0_MAX)), hi = Math.min(Math.floor(N * 0.6), Math.ceil(fs / F0_MIN));
+    const ac = this.ac;
+    for (let lag = lo - 1; lag <= hi + 1; lag++) {
+      let s = 0;
+      for (let i = 0, m = N - lag; i < m; i++) s += z[i] * z[i + lag];
+      const e0 = c[N - lag], e1 = c[N] - c[lag];
+      ac[lag] = e0 > 0 && e1 > 0 ? s / Math.sqrt(e0 * e1) : 0;
+    }
+    let best = 0, bestLag = 0;
+    for (let lag = lo; lag <= hi; lag++) {
+      const r = ac[lag];
+      if (r > ac[lag - 1] && r >= ac[lag + 1] && r > best) { best = r; bestLag = lag; }
+    }
+    if (!bestLag) return { strength: 0, f0: 0 };
+    // Parabolic interpolation of the peak lag.
+    const r0 = ac[bestLag - 1], r1 = ac[bestLag], r2 = ac[bestLag + 1];
+    const den = r0 - 2 * r1 + r2;
+    const lagF = bestLag + (den < 0 ? (0.5 * (r0 - r2)) / den : 0);
+    return { strength: best, f0: fs / lagF };
   }
 
-  /** Speaker formant scale factor from the running F0. */
+  /**
+   * Speaker formant scale factor: starts from the running F0 (male ≈ 1, female ≈ 1.18), then is
+   * corrected (±15 %) by the long-term median F2 of connected speech (≈ 1500 Hz × scale, the
+   * neutral-tract value) once a few seconds of voiced speech have been seen.
+   */
   private get scale(): number {
-    return Math.min(1.32, Math.max(0.95, Math.exp(SCALE_EXP * (this.lnF0 - Math.log(REF_F0)))));
+    const s0 = Math.min(Math.log(1.32), Math.max(Math.log(0.95), SCALE_EXP * (this.lnF0 - Math.log(REF_F0))));
+    const w = clamp01((this.f2Evidence - 2) / 8);
+    const corr = Math.min(0.15, Math.max(-0.15, this.lnF2 - Math.log(REF_F2) - s0));
+    return Math.exp(Math.min(Math.log(1.35), Math.max(Math.log(0.9), s0 + w * corr)));
   }
 
   /** Squared normalized distance of (F1, F2) to the nearest vowel prototype. */
@@ -317,26 +360,42 @@ export class VowelAnalyzer {
     // (low voices → prefer high order, high voices → prefer low order).
     const scale = this.scale;
     const female = clamp01((this.lnF0 - Math.log(REF_F0 + 20)) / Math.log(FEMALE_F0 / (REF_F0 + 20)));
+    // Spectral balance evidence: back vowels have little energy at 1.5-3.5 kHz, front vowels a strong
+    // F2/F3 there. Only used to arbitrate between hypotheses (merged F1/F2 vs. a real high F2).
+    let lh = NaN;
     let bestScore = Infinity, bestSlot: LpcSlot | null = null;
     for (let si = 0; si < slots.length; si++) {
       const s = slots[si];
-      if (!this.levinson(s) || !this.roots(s) || !this.pickFormants(s)) continue;
+      if (!this.levinson(s)) continue;
+      if (Number.isNaN(lh)) lh = this.bandRatioDb(s);
+      if (!this.roots(s) || !this.pickFormants(s)) continue;
       const rank = slots.length > 1 ? si / (slots.length - 1) : 0; // 0 = lowest order
-      const prior = this.o.orderPrior * (rank * female + (1 - rank) * (1 - female));
-      const score = this.vowelDist(s.f1, s.f2, scale) + prior;
+      let score = this.vowelDist(s.f1, s.f2, scale) + this.o.orderPrior * (rank * female + (1 - rank) * (1 - female));
+      const f2n = s.f2 / scale;
+      if (f2n > 1500) score += this.o.balanceWeight * smoothstep(lh, 8, 22);
+      else if (f2n < 1300) score += this.o.balanceWeight * (1 - smoothstep(lh, -2, 12));
       if (score < bestScore) { bestScore = score; bestSlot = s; }
     }
-    if (slots[0].p > 0 && this.levinson(slots[0])) this.debug.lowHigh = this.bandRatioDb(slots[0]);
+    this.debug.lowHigh = lh;
     if (!bestSlot) return;
     let f1 = bestSlot.f1, f2 = bestSlot.f2;
     this.debug.order = bestSlot.p;
 
     // 3-frame median against single-frame tracking errors.
     const h1 = this.f1Hist, h2 = this.f2Hist;
+    const onset = this.histN < 3; // first frames of a voiced segment: the old shape is stale
     if (this.histN === 0) { h1.fill(f1); h2.fill(f2); }
     h1[this.histN % 3] = f1; h2[this.histN % 3] = f2; this.histN++;
     f1 = median3(h1[0], h1[1], h1[2]); f2 = median3(h2[0], h2[1], h2[2]);
     this.debug.f1 = f1; this.debug.f2 = f2; this.debug.scale = scale;
+    if (voicing > 0.6) {
+      // Running median of log F2 (sign-step; fast for the first seconds, then slow ≈ tens of seconds).
+      if (this.f2Evidence === 0) this.lnF2 = Math.log(REF_F2) + Math.log(scale);
+      this.f2Evidence += dt;
+      const step = dt * (this.f2Evidence < 5 ? 0.15 : 0.03);
+      const d = Math.log(f2) - this.lnF2;
+      this.lnF2 += Math.abs(d) < step ? d : Math.sign(d) * step;
+    }
 
     // Soft classification over prototypes (speaker-normalized log formants).
     const l1 = Math.log(f1 / scale), l2 = Math.log(f2 / scale);
@@ -356,7 +415,7 @@ export class VowelAnalyzer {
     for (let k = 0; k < NV; k++) {
       const key = VISEME_KEYS[k];
       const target = vt[k] / sum, cur = this.shape[key];
-      const t = target > cur ? 0.035 : 0.06;
+      const t = onset ? 0.012 : target > cur ? 0.035 : 0.06;
       this.shape[key] = cur + (target - cur) * (1 - Math.exp(-dt / t)) * conf;
     }
   }

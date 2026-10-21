@@ -29,6 +29,32 @@ function createDefaultWorker(): Worker {
   return new Worker(new URL('./faceWorker.ts', import.meta.url), { type: 'module' });
 }
 
+/** Thrown by start() when stop() (or a newer start()) cancelled it. Not a real failure. */
+export class TrackerAbortError extends Error {
+  readonly trackerAborted = true;
+  constructor(message = 'Tracker start was cancelled') {
+    super(message);
+    this.name = 'AbortError';
+  }
+}
+
+/** True for the cancellation error of FaceTracker.start() (not for getUserMedia's own AbortError). */
+export function isTrackerAbort(err: unknown): boolean {
+  return !!err && typeof err === 'object' && (err as { trackerAborted?: unknown }).trackerAborted === true;
+}
+
+/** getUserMedia failed because the requested (saved) camera is not present anymore. */
+function isMissingDeviceError(err: unknown): boolean {
+  const e = err as { name?: unknown; constraint?: unknown } | null;
+  if (!e || typeof e !== 'object') return false;
+  if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') return true;
+  return e.name === 'OverconstrainedError' && (e.constraint === 'deviceId' || e.constraint === undefined || e.constraint === '');
+}
+
+/** If requestVideoFrameCallback / rAF stays silent this long while the video plays, poll by timer
+ *  (Wayland compositors may stop frame callbacks for minimized windows). */
+const FRAME_CB_STALL_MS = 200;
+
 export class FaceTracker {
   readonly video: HTMLVideoElement;
   /** Called once per processed camera frame (also with detected=false when no face is visible). */
@@ -56,6 +82,13 @@ export class FaceTracker {
   private lastVideoTime = -1;
   private rvfcId = 0;
   private rafId = 0;
+  private stallTimer: ReturnType<typeof setTimeout> | null = null;
+  private cbStalled = false;     // frame callbacks stopped firing → timer polling active
+  private lastTickByTimer = false;
+  private stallWarned = false;
+  private pollMs = 16;
+  private pendingInit: ((e: Error) => void) | null = null; // rejects the running worker init
+  private _cameraFallback = false;
   private session = 0;           // increments on every start/stop; stale async work checks it
   private inFlight = false;
   private inFlightSince = 0;
@@ -90,6 +123,8 @@ export class FaceTracker {
   get mode(): 'worker' | 'main' | null { return this._mode; }
   /** Duration of the last detectForVideo call in ms. */
   get detectMs(): number { return this._detectMs; }
+  /** True when the saved camera (cam.deviceId) was not found and the default camera is used instead. */
+  get cameraFallback(): boolean { return this._cameraFallback; }
   /** Normalized landmarks (x,y in 0..1 of the NON-mirrored video image) of the last frame, or null. */
   get lastLandmarks(): Landmark[] | null {
     if (!this.lmData) return null;
@@ -108,9 +143,15 @@ export class FaceTracker {
     return all.filter((d) => d.kind === 'videoinput');
   }
 
+  /**
+   * Opens the camera and the model. Rejects with a TrackerAbortError (name 'AbortError', see
+   * isTrackerAbort) when stop() or another start() ran in the meantime.
+   * If the saved camera (cam.deviceId) is missing, the default camera is used (see cameraFallback).
+   */
   async start(cam: CameraSettings, useGpu: boolean): Promise<void> {
     this.stop();
     const session = ++this.session;
+    const alive = () => { if (session !== this.session) throw new TrackerAbortError(); };
     try {
       // ── Camera ──
       const video: MediaTrackConstraints = {
@@ -118,10 +159,23 @@ export class FaceTracker {
         height: { ideal: cam.height },
         frameRate: { ideal: cam.fps },
       };
-      if (cam.deviceId) video.deviceId = { exact: cam.deviceId };
-      const stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
-      if (session !== this.session) { stream.getTracks().forEach((t) => t.stop()); return; }
+      let stream: MediaStream;
+      if (cam.deviceId) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: { ...video, deviceId: { exact: cam.deviceId } }, audio: false });
+        } catch (e) {
+          alive();
+          if (!isMissingDeviceError(e)) throw e;
+          console.warn('[FaceTracker] saved camera not found, using the default camera:', e);
+          stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+          this._cameraFallback = true;
+        }
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+      }
+      if (session !== this.session) { stream.getTracks().forEach((t) => t.stop()); throw new TrackerAbortError(); }
       this.stream = stream;
+      this.pollMs = Math.max(8, Math.min(33, 500 / Math.max(1, cam.fps || 30)));
       for (const track of stream.getVideoTracks()) {
         track.addEventListener('ended', () => {
           if (session !== this.session) return;
@@ -132,7 +186,7 @@ export class FaceTracker {
       }
       this.video.srcObject = stream;
       await this.video.play().catch(() => { /* muted autoplay should not fail; frames still arrive */ });
-      if (session !== this.session) return;
+      alive();
 
       // ── Model ──
       const delegate: Delegate = useGpu ? 'GPU' : 'CPU';
@@ -142,7 +196,7 @@ export class FaceTracker {
           await this.startWorker(delegate, session);
           ok = true;
         } catch (e) {
-          if (session !== this.session) return;
+          alive();
           console.warn('[FaceTracker] worker unavailable, running MediaPipe on the main thread:', e);
           this.worker?.terminate();
           this.worker = null;
@@ -150,7 +204,7 @@ export class FaceTracker {
       }
       if (!ok) {
         const r = await createLandmarker(this.assetBase, delegate);
-        if (session !== this.session) { r.lm.close(); return; }
+        if (session !== this.session) { r.lm.close(); throw new TrackerAbortError(); }
         this.landmarker = r.lm;
         this._delegate = r.delegate;
         this._mode = 'main';
@@ -165,18 +219,28 @@ export class FaceTracker {
       this.fpsCount = 0;
       this.scheduleNext(session);
     } catch (e) {
-      if (session === this.session) this.stop();
-      throw e;
+      if (session === this.session) { this.stop(); throw e; }
+      throw isTrackerAbort(e) ? e : new TrackerAbortError(); // failure of a cancelled start: irrelevant
     }
   }
 
   stop(): void {
     this.session++;
     this._running = false;
+    if (this.pendingInit) {
+      const reject = this.pendingInit;
+      this.pendingInit = null;
+      reject(new TrackerAbortError());
+    }
     if (this.rvfcId && typeof this.video.cancelVideoFrameCallback === 'function') this.video.cancelVideoFrameCallback(this.rvfcId);
     if (this.rafId) cancelAnimationFrame(this.rafId);
+    if (this.stallTimer) clearTimeout(this.stallTimer);
     this.rvfcId = 0;
     this.rafId = 0;
+    this.stallTimer = null;
+    this.cbStalled = false;
+    this.stallWarned = false;
+    this._cameraFallback = false;
     if (this.stream) {
       for (const t of this.stream.getTracks()) t.stop();
       this.stream = null;
@@ -214,9 +278,11 @@ export class FaceTracker {
     const base = new URL(this.assetBase + '/', document.baseURI).href.replace(/\/+$/, '');
     return new Promise<void>((resolve, reject) => {
       let settled = false;
-      const timer = setTimeout(() => { if (!settled) { settled = true; reject(new Error('worker init timeout')); } }, 30000);
+      const timer = setTimeout(() => { if (!settled) { settled = true; this.pendingInit = null; reject(new Error('worker init timeout')); } }, 30000);
+      // stop() during init settles immediately instead of waiting for the timeout.
+      this.pendingInit = (e) => { if (!settled) { settled = true; clearTimeout(timer); reject(e); } };
       worker.onerror = (ev) => {
-        if (!settled) { settled = true; clearTimeout(timer); reject(new Error(ev.message || 'worker error')); return; }
+        if (!settled) { settled = true; clearTimeout(timer); this.pendingInit = null; reject(new Error(ev.message || 'worker error')); return; }
         if (session === this.session) console.error('[FaceTracker] worker error:', ev.message);
       };
       worker.onmessage = (ev: MessageEvent) => {
@@ -225,9 +291,9 @@ export class FaceTracker {
         if (m.type === 'ready') {
           this._delegate = m.delegate;
           this._mode = 'worker';
-          if (!settled) { settled = true; clearTimeout(timer); resolve(); }
+          if (!settled) { settled = true; clearTimeout(timer); this.pendingInit = null; resolve(); }
         } else if (m.type === 'error') {
-          if (!settled) { settled = true; clearTimeout(timer); reject(new Error(m.message)); return; }
+          if (!settled) { settled = true; clearTimeout(timer); this.pendingInit = null; reject(new Error(m.message)); return; }
           console.error('[FaceTracker] detection error:', m.message);
           if (m.fatal) { this.stop(); this.onError?.(new Error(m.message)); }
         } else if (m.type === 'result') {
@@ -258,24 +324,46 @@ export class FaceTracker {
 
   // ── Frame loop ─────────────────────────────────────────────────────────────────────────────
 
+  // Frame callbacks (rVFC, else rAF) drive the loop. A watchdog timer polls the video instead when they
+  // stop firing (e.g. KWin/Wayland throttles minimized windows while visibilityState stays 'visible').
   private scheduleNext(session: number): void {
     if (session !== this.session || !this._running) return;
     const v = this.video;
-    if (typeof v.requestVideoFrameCallback === 'function') {
-      this.rvfcId = v.requestVideoFrameCallback(() => { this.rvfcId = 0; this.tick(session, true); });
-    } else {
-      this.rafId = requestAnimationFrame(() => { this.rafId = 0; this.tick(session, false); });
+    if (!this.rvfcId && !this.rafId) {
+      if (typeof v.requestVideoFrameCallback === 'function') {
+        this.rvfcId = v.requestVideoFrameCallback(() => { this.rvfcId = 0; this.onFrameCallback(session, true); });
+      } else {
+        this.rafId = requestAnimationFrame(() => { this.rafId = 0; this.onFrameCallback(session, false); });
+      }
     }
+    if (this.stallTimer) clearTimeout(this.stallTimer);
+    this.stallTimer = setTimeout(() => {
+      this.stallTimer = null;
+      if (session !== this.session || !this._running) return;
+      if (!this.cbStalled && !v.paused && !this.stallWarned) {
+        this.stallWarned = true;
+        console.warn('[FaceTracker] frame callbacks stalled – polling the video by timer while they are missing');
+      }
+      this.cbStalled = !v.paused;
+      this.tick(session, false, true);
+    }, this.cbStalled ? this.pollMs : FRAME_CB_STALL_MS);
   }
 
-  private tick(session: number, fromRvfc: boolean): void {
+  private onFrameCallback(session: number, fromRvfc: boolean): void {
+    this.cbStalled = false;
+    this.tick(session, fromRvfc, false);
+  }
+
+  private tick(session: number, fromRvfc: boolean, byTimer: boolean): void {
     if (session !== this.session || !this._running) return;
     const v = this.video;
     try {
       if (v.readyState >= 2 && v.videoWidth > 0) {
-        // With rVFC every callback is a new frame; the rAF fallback must skip repeated frames.
-        const isNew = fromRvfc || v.currentTime !== this.lastVideoTime;
+        // With rVFC every callback is a new frame (unless the timer already took it); rAF/timer polling
+        // must skip repeated frames.
+        const isNew = v.currentTime !== this.lastVideoTime || (fromRvfc && !this.lastTickByTimer);
         if (isNew) {
+          this.lastTickByTimer = byTimer;
           this.lastVideoTime = v.currentTime;
           if (this.worker) this.sendToWorker(session);
           else if (this.landmarker && !this.recovering) this.processMain(session);

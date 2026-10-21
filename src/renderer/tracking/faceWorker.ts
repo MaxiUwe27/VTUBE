@@ -83,7 +83,9 @@ ctx.onmessage = async (e: MessageEvent<InMsg>) => {
     if (delegate === 'GPU' && frames > 5 && frames <= 20) {
       gpuMsSum += ms;
       if (frames === 20 && gpuMsSum / 15 > SLOW_GPU_MS) {
-        switching = switchToCpu(`GPU too slow (${(gpuMsSum / 15).toFixed(0)} ms/frame)`).finally(() => { switching = null; });
+        switching = switchToCpu(`GPU too slow (${(gpuMsSum / 15).toFixed(0)} ms/frame)`).catch((e2) => {
+          ctx.postMessage({ type: 'error', message: String((e2 as Error)?.message ?? e2), fatal: true });
+        }).finally(() => { switching = null; });
       }
     }
   } catch (err) {
