@@ -122,4 +122,4 @@ Einstellungen: `~/.config/VTube Linux/settings.json`.
 ## Technik
 
 Electron 38, three.js + [@pixiv/three-vrm](https://github.com/pixiv/three-vrm), [MediaPipe Tasks Vision](https://github.com/google-ai-edge/mediapipe).
-Architektur: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Architektur: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Anforderungen an eigene Avatare (Unity/UniVRM): [docs/AVATAR_ANLEITUNG.md](docs/AVATAR_ANLEITUNG.md).

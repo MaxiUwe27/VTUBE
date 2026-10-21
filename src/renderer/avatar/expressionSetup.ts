@@ -77,6 +77,8 @@ const PRESETS = new Set(['aa', 'ih', 'ou', 'ee', 'oh', 'blink', 'blinkLeft', 'bl
 export const SOLVER_PRESETS = ['blink', 'blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh',
   'happy', 'angry', 'sad', 'relaxed', 'surprised'] as const;
 
+const SMALL_KANA: Record<string, string> = { ァ: 'ア', ィ: 'イ', ゥ: 'ウ', ェ: 'エ', ォ: 'オ', ャ: 'ヤ', ュ: 'ユ', ョ: 'ヨ' };
+
 /** Alternative names per solver preset, in priority order (matched case-insensitively, ignoring
  *  spaces . _ -, also after prefixes like "Face.", "blendShape1.", "A_", "PS_"). */
 const PRESET_ALIASES: Record<string, string[]> = {
@@ -139,7 +141,9 @@ const PREFIX_RE = /^(?:a|ps|arkit|bs|blendshape\d*|blend_shape\d*|shape|shapes|m
 
 /** Lower case without spaces / . _ - */
 export function normName(s: string): string {
-  return s.toLowerCase().replace(/[\s._\-]+/g, '');
+  // NFKC folds half-width katakana/digits (ｳｨﾝｸ２ → ウィンク2); small kana are folded to large ones
+  // because MMD models spell the same morph both ways (ウィンク / ウインク).
+  return s.normalize('NFKC').toLowerCase().replace(/[\s._\-]+/g, '').replace(/[ァィゥェォャュョ]/g, (c) => SMALL_KANA[c] ?? c);
 }
 
 /** All lookup keys of a model-side name (full, after the last ".", from "Fcl_", without known prefix). */
