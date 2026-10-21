@@ -53,9 +53,18 @@ export interface AvatarPose {
 export interface VrmInfo {
   name: string;
   version: '0' | '1';
-  expressionNames: string[];   // all expression names available on the model (presets + custom)
-  hasPerfectSync: boolean;     // model has (most) ARKit 52 blendshapes as custom expressions
+  /** Usable expression names (presets + custom + automatically mapped ones) – only expressions that
+   *  actually change something (binds to morph targets with data / materials). */
+  expressionNames: string[];
+  hasPerfectSync: boolean;     // model has (most) ARKit 52 blendshapes (as expressions or mapped morphs)
   hasLookAt: boolean;
+  /** Expressions the renderer created automatically from morph targets / differently named model
+   *  expressions (name → German description of the source). */
+  mappedExpressions?: { name: string; source: string }[];
+  /** Model expressions that exist but do nothing (no binds or only morph targets without data). */
+  emptyExpressions?: string[];
+  /** Repairs applied while loading (German, shown in the diagnostics). */
+  repairs?: string[];
 }
 
 /** WebSocket messages main -> OBS output page (JSON). */

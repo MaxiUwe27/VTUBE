@@ -12,6 +12,7 @@ import type { AvatarPose, HumanBone, VrmInfo } from '../../shared/types';
 import type { ViewSettings } from '../../shared/settings';
 import { DEFAULT_SETTINGS, mergeSettings } from '../../shared/settings';
 import { ExpressionMap, PERFECT_SYNC_MIN } from './expressions';
+import { type ExpressionReport, setupExpressions } from './expressionSetup';
 import { type BodyMetrics, defaultMetrics, frameCamera, normalizeOrbit } from './framing';
 import { buildRestPose, computeIdle, IDLE_BONES, toVrm0 } from './bodyPose';
 import { Readback } from './readback';
@@ -60,8 +61,9 @@ interface LoadedModel {
   info: VrmInfo;
   isVrm0: boolean;
   exprMap: ExpressionMap | null;
-  exprWeights: Float32Array;
+  exprWeights: Float32Array;       // weights from the last pose (per exprMap index)
   perfectSyncNames: string[];
+  exprReport: ExpressionReport | null;
   bones: ManagedBone[];
   boneByName: Map<VRMHumanBoneName, ManagedBone>;
   hipsNode: THREE.Object3D | null;
@@ -115,6 +117,8 @@ export class AvatarRenderer {
   private readonly idle = new Map<VRMHumanBoneName, THREE.Quaternion>();
   private idleAmount = 1;
   private gaze = { yaw: 0, pitch: 0 };
+  /** Manual expression values (diagnostics test sliders); override the pose while set. */
+  private readonly exprTest = new Map<string, number>();
 
   private running = false;
   private rafId = 0;
@@ -184,6 +188,37 @@ export class AvatarRenderer {
     return this.model ? this.model.perfectSyncNames.slice() : [];
   }
 
+  /** Expression diagnostics of the current model (binds, automatic mappings, repairs, morph names). */
+  get expressionReport(): ExpressionReport | null {
+    return this.model?.exprReport ?? null;
+  }
+
+  /** Weight the last pose set for a model expression (exact name, after name mapping), 0 if none. */
+  getExpressionLevel(name: string): number {
+    const m = this.model;
+    const i = m?.exprMap ? m.exprMap.indexOf(name) : -1;
+    return m && i >= 0 && m.exprMap!.names[i] === name ? m.exprWeights[i] : 0;
+  }
+
+  /** Manually drive a model expression (overrides tracking) – null releases it. */
+  setExpressionTest(name: string, value: number | null): void {
+    if (value === null || !isFinite(value)) this.exprTest.delete(name);
+    else this.exprTest.set(name, THREE.MathUtils.clamp(value, 0, 1));
+  }
+
+  /** GPU limits relevant for morph targets (for the diagnostics dump). */
+  get gpuInfo(): { renderer: string; maxTextureSize: number; maxArrayTextureLayers: number } {
+    try {
+      const gl = this.renderer.getContext();
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+      const layers = 'MAX_ARRAY_TEXTURE_LAYERS' in gl ? gl.getParameter((gl as WebGL2RenderingContext).MAX_ARRAY_TEXTURE_LAYERS) : 0;
+      return { renderer: String(name), maxTextureSize: Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 0, maxArrayTextureLayers: Number(layers) || 0 };
+    } catch {
+      return { renderer: 'unknown', maxTextureSize: 0, maxArrayTextureLayers: 0 };
+    }
+  }
+
   get fps(): number {
     return this._fps;
   }
@@ -223,8 +258,26 @@ export class AvatarRenderer {
     try {
       VRMUtils.removeUnnecessaryVertices(gltf.scene);
       VRMUtils.combineSkeletons(gltf.scene);
-    } catch {
-      /* optimisations only */
+    } catch (err) {
+      console.warn('[AvatarRenderer] VRMUtils optimisation failed (ignored):', err);
+    }
+    // three-vrm adds VRM0/VRM1 morph binds from promises it does not await – let them settle before
+    // the expression setup inspects (and repairs) the binds.
+    await new Promise((r) => setTimeout(r, 0));
+    if (token !== this.loadToken || this.disposed) {
+      disposeObject(vrm.scene);
+      throw new Error('Load superseded');
+    }
+    let exprReport: ExpressionReport | null = null;
+    try {
+      exprReport = setupExpressions(vrm, gltf, { maxArrayLayers: this.gpuInfo.maxArrayTextureLayers });
+      if (exprReport.repairs.length || exprReport.mapped.length || exprReport.empty.length) {
+        console.info('[AvatarRenderer] expression setup:', {
+          repairs: exprReport.repairs, mapped: exprReport.mapped, empty: exprReport.empty,
+        });
+      }
+    } catch (err) {
+      console.error('[AvatarRenderer] expression setup failed (expressions as loaded):', err);
     }
     VRMUtils.rotateVRM0(vrm);
     vrm.scene.traverse((o) => { o.frustumCulled = false; });
@@ -234,8 +287,9 @@ export class AvatarRenderer {
       vrm.lookAt.target = null;
     }
 
-    const model = this.buildModel(vrm);
+    const model = this.buildModel(vrm, exprReport);
     this.unloadVRM(false);
+    this.exprTest.clear();
     this.model = model;
     this.scene.add(vrm.scene);
     this.gaze = { yaw: 0, pitch: 0 };
@@ -468,6 +522,7 @@ export class AvatarRenderer {
         if (snap) m.gotPose = true;
       }
       this.poseDirty = false;
+      this.applyExpressions(m);
       this.applyBones(m, dt, snap);
       this.applyGaze(m, dt, snap);
 
@@ -499,9 +554,6 @@ export class AvatarRenderer {
           if (i >= 0 && val > w[i]) w[i] = Math.min(1, val);
         }
       }
-      const names = m.exprMap.names;
-      const mgr = m.vrm.expressionManager;
-      for (let i = 0; i < names.length; i++) mgr.setValue(names[i], w[i]);
     }
 
     // Tracked bones.
@@ -543,6 +595,19 @@ export class AvatarRenderer {
     } else {
       m.gazeTarget.yaw = 0;
       m.gazeTarget.pitch = 0;
+    }
+  }
+
+  /** Pose weights (or the manual test values) → expression manager; vrm.update applies them. */
+  private applyExpressions(m: LoadedModel): void {
+    const mgr = m.vrm.expressionManager;
+    if (!m.exprMap || !mgr) return;
+    const names = m.exprMap.names;
+    const w = m.exprWeights;
+    const test = this.exprTest.size ? this.exprTest : null;
+    for (let i = 0; i < names.length; i++) {
+      const t = test?.get(names[i]);
+      mgr.setValue(names[i], t ?? w[i]);
     }
   }
 
@@ -603,7 +668,7 @@ export class AvatarRenderer {
 
   // ---------------------------------------------------------------- model setup
 
-  private buildModel(vrm: VRM): LoadedModel {
+  private buildModel(vrm: VRM, report: ExpressionReport | null): LoadedModel {
     const meta = vrm.meta as { metaVersion?: string; name?: string; title?: string } | undefined;
     const isVrm0 = meta?.metaVersion === '0';
     const name = ((isVrm0 ? meta?.title : meta?.name) || meta?.name || meta?.title || 'VRM Model').trim();
@@ -611,7 +676,10 @@ export class AvatarRenderer {
     const mgr = vrm.expressionManager;
     const exprNames = mgr ? mgr.expressions.map((e) => e.expressionName) : [];
     const exprMap = mgr ? new ExpressionMap(exprNames) : null;
-    const perfectSyncNames = exprMap ? exprMap.matchArkit() : [];
+    // With a report: only expressions that do something count (an empty "blink" must not make the
+    // solver route the eye closure through it); without one (setup failed): everything as loaded.
+    const usableNames = report ? report.usable : exprNames;
+    const perfectSyncNames = report ? report.perfectSyncNames : exprMap ? exprMap.matchArkit() : [];
 
     const bones: ManagedBone[] = [];
     const boneByName = new Map<VRMHumanBoneName, ManagedBone>();
@@ -640,14 +708,20 @@ export class AvatarRenderer {
       info: {
         name,
         version: isVrm0 ? '0' : '1',
-        expressionNames: exprNames,
+        expressionNames: usableNames,
         hasPerfectSync: perfectSyncNames.length >= PERFECT_SYNC_MIN,
         hasLookAt: !!vrm.lookAt,
+        ...(report ? {
+          mappedExpressions: report.mapped.map((x) => ({ ...x })),
+          emptyExpressions: report.empty.slice(),
+          repairs: report.repairs.slice(),
+        } : {}),
       },
       isVrm0,
       exprMap,
       exprWeights: new Float32Array(exprNames.length),
       perfectSyncNames,
+      exprReport: report,
       bones,
       boneByName,
       hipsNode,

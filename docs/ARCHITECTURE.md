@@ -44,10 +44,29 @@ export class AvatarRenderer {
   onFrame: ((dtSeconds: number) => void) | null;  // nach jedem gerenderten Frame
   readPixels(width: number, height: number): Uint8Array | null; // RGBA top-down in Zielgröße (für vcam)
   readonly fps: number;                  // gemessene Render-FPS
+  readonly expressionReport: ExpressionReport | null; // Diagnose: Ausdrücke, Bindungen, Zuordnungen, Morph-Namen
+  getExpressionLevel(name: string): number;           // Wert, den die letzte Pose für den Ausdruck gesetzt hat
+  setExpressionTest(name: string, value: number | null): void; // Test-Regler: überschreibt die Pose (null = frei)
+  readonly gpuInfo: { renderer: string; maxTextureSize: number; maxArrayTextureLayers: number };
 }
 ```
 Behandelt: VRM0 + VRM1 (`VRMUtils.rotateVRM0`), Arme aus T-Pose (`armPose`), Atmung/Idle, SpringBones,
 LookAt, Auto-Framing per Head-Bone, Resize, Dispose (`VRMUtils.deepDispose`).
+
+**Ausdrucks-Setup** (`avatar/expressionSetup.ts`, läuft in `loadVRM` – also auch auf der OBS-Seite):
+1. Reparaturen am three-vrm-Import: Morph-Bindungen, die three-vrm verwirft, wenn ein Mesh-Teil
+   (Primitive) den Morph-Target nicht hat; doppelte VRM0-Clips (leerer erster Clip); VRM0-Gewichte 0..1
+   statt 0..100.
+2. Automatische Zuordnung für alle Namen, die der Solver sendet (VRM1-Presets + 52 ARKit), wenn das Modell
+   sie nicht (nutzbar) hat: VRM0-Preset in anderer Schreibweise („Joy“, „Blink_L“) → anders benannter
+   Ausdruck („A“, „まばたき“) → Morph-Target per Alias-Tabelle (vrc.*, Fcl_*, MMD, ARKit-Varianten, Präfixe
+   wie „Face.“/„blendShape1.“/„A_“/„PS_“) → für Presets ARKit-Kombinationen. Zugeordnete Ausdrücke werden
+   als eigene `VRMExpression` (ohne Overrides) registriert; ARKit nur, wenn danach ≥ 40 nutzbar sind
+   (→ Perfect Sync).
+3. Bei sehr vielen Morph-Targets (> 64 je Geometrie oder > 64 MB Morph-Textur) werden ungenutzte Targets
+   entfernt (three.js lädt alle Targets als Float-Textur hoch; zu große Texturen scheitern auf der GPU still).
+`VrmInfo.expressionNames` enthält danach nur Ausdrücke mit Wirkung; `mappedExpressions`, `emptyExpressions`,
+`repairs` beschreiben das Ergebnis. UI: Modell → „Ausdrücke (Diagnose)“ (Test-Regler, „Diagnose kopieren“).
 
 ### `src/renderer/tracking/FaceTracker.ts`
 ```ts

@@ -13,6 +13,7 @@ import { h } from './dom';
 import { errorText, toast } from './toast';
 import { buildPanel } from './panel';
 import { setupViewport } from './viewport';
+import { usableStandardCount } from './sections/expressionDiag';
 import type { AppActions, AppContext, AppEvent, LiveState, RunState } from './context';
 
 // ---------------------------------------------------------------------------------------------
@@ -186,6 +187,9 @@ async function bootstrap(): Promise<void> {
       solver.setModel(info);
       live.model = { info, fileName, path };
       toast(`Modell geladen: ${info.name || fileName}`, 'success', 2500);
+      if (!info.hasPerfectSync && usableStandardCount(info.expressionNames) < 3) {
+        toast('Dieses Modell hat keine eingerichteten Gesichtsausdrücke – siehe Modell → Ausdrücke (Diagnose)', 'warning', 9000);
+      }
     } finally {
       live.modelLoading = false;
       emit('model');

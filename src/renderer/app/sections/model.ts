@@ -3,6 +3,7 @@
 import { basename, dirname, type AppContext, type SectionModule } from '../context';
 import { button, hint, infoGrid, section, subhead } from '../controls';
 import { h, icon, setChildren, toggleClass } from '../dom';
+import { expressionDiagnostics, isUnusedExpression } from './expressionDiag';
 
 export function modelSection(ctx: AppContext): SectionModule {
   const { store, live, actions } = ctx;
@@ -34,7 +35,10 @@ export function modelSection(ctx: AppContext): SectionModule {
     info.set('name', m.info.name || m.fileName);
     info.set('version', m.info.version === '1' ? 'VRM 1.0' : 'VRM 0.x');
     info.set('ps', m.info.hasPerfectSync ? 'Ja (ARKit 52)' : 'Nein', m.info.hasPerfectSync ? 'good' : 'muted');
-    info.set('expr', String(m.info.expressionNames.length));
+    const mapped = m.info.mappedExpressions?.length ?? 0;
+    const emptyN = m.info.emptyExpressions?.filter((n) => !isUnusedExpression(n)).length ?? 0;
+    info.set('expr', `${m.info.expressionNames.length} nutzbar${mapped ? ` · ${mapped} zugeordnet` : ''}${emptyN ? ` · ${emptyN} leer` : ''}`,
+      m.info.expressionNames.length ? '' : 'warn');
     info.set('lookat', m.info.hasLookAt ? 'Ja' : 'Nein');
     info.set('file', m.fileName);
     const fileCell = info.el.querySelector('dd:last-of-type');
@@ -74,17 +78,21 @@ export function modelSection(ctx: AppContext): SectionModule {
       renderRecent();
     }
   });
+  const diag = expressionDiagnostics(ctx);
   ctx.on('model', () => {
     renderInfo();
     lastRecentKey = '';
     renderRecent();
+    diag.render();
   });
   renderInfo();
+  diag.render();
 
   const sec = section('model', 'Modell', 'user', true,
     h('div', { class: 'btn-row' }, openBtn),
     hint('Oder eine ', h('b', null, '.vrm'), '-Datei einfach ins Fenster ziehen.'),
     infoCard,
+    diag.el,
     subhead('Zuletzt verwendet'),
     recentList,
   );
@@ -92,5 +100,5 @@ export function modelSection(ctx: AppContext): SectionModule {
     sec.badge.textContent = live.model ? `VRM ${live.model.info.version === '1' ? '1.0' : '0.x'}` : '';
   });
 
-  return { el: sec.el, isOpen: () => sec.open };
+  return { el: sec.el, isOpen: () => sec.open, tick: () => diag.tick() };
 }
