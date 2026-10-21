@@ -1,7 +1,10 @@
 // Persistent settings schema + defaults. Stored as JSON in Electron userData (settings.json).
 
 export interface CameraSettings {
+  source: 'device' | 'url';  // webcam device, or a URL (web page / MJPEG / video stream) rendered offscreen
   deviceId: string | null;   // null = default webcam
+  url: string;               // used when source === 'url'
+  recentUrls: string[];      // last used URLs (max 10)
   width: number;             // requested capture size
   height: number;
   fps: number;
@@ -50,6 +53,9 @@ export interface ViewSettings {
   cameraFov: number;               // degrees
   framing: 'head' | 'upperBody' | 'fullBody';
   cameraOffset: { x: number; y: number; zoom: number }; // user adjustments on top of auto framing
+  /** Camera orbit around the framed target, degrees. yaw > 0 = camera moves toward the avatar's own
+   *  left side (viewer sees more of the avatar's left cheek); pitch > 0 = camera above, looking down. */
+  orbit: { yaw: number; pitch: number };
   lightIntensity: number;
   ambientIntensity: number;
   lightColor: string;
@@ -77,7 +83,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   version: 1,
-  camera: { deviceId: null, width: 640, height: 480, fps: 30, showPreview: true, showLandmarks: false },
+  camera: { source: 'device', deviceId: null, url: '', recentUrls: [], width: 640, height: 480, fps: 30, showPreview: true, showLandmarks: false },
   tracking: {
     enabled: true,
     useGpu: true,
@@ -103,6 +109,7 @@ export const DEFAULT_SETTINGS: Settings = {
     cameraFov: 30,
     framing: 'upperBody',
     cameraOffset: { x: 0, y: 0, zoom: 1 },
+    orbit: { yaw: 0, pitch: 0 },
     lightIntensity: 1.6,
     ambientIntensity: 0.6,
     lightColor: '#ffffff',
