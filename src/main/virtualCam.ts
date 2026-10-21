@@ -1,16 +1,12 @@
 // Virtual webcam: pipes raw RGBA frames into ffmpeg, which writes to a v4l2loopback device.
-// No electron import (testable with plain node).
+// The device path is decided by the caller (main.ts via vcamDevice.resolveVcamDevice) – this module
+// never picks a device on its own. No electron import (testable with plain node).
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import type { VcamStatus } from '../shared/api';
+import { VCAM_SETUP_HINT } from '../shared/vcamSetup';
+import { checkDevice, findHolders, formatHolders, type ProbeOptions } from './vcamDevice';
 
 export interface VcamConfig { device: string; width: number; height: number; fps: number }
-
-const MODPROBE_HINT =
-  'v4l2loopback installieren und laden:\n' +
-  '  sudo dnf install v4l2loopback\n' +
-  '  sudo modprobe v4l2loopback devices=1 video_nr=10 card_label="VTube Linux" exclusive_caps=1';
 
 export class VirtualCam {
   private proc: ChildProcessWithoutNullStreams | null = null;
@@ -21,10 +17,18 @@ export class VirtualCam {
   private stderrTail = '';
   private _droppedFrames = 0;
 
-  constructor(private readonly ffmpegPath = process.env.VTUBE_FFMPEG || 'ffmpeg') {}
+  constructor(
+    private readonly ffmpegPath = process.env.VTUBE_FFMPEG || 'ffmpeg',
+    private readonly probe: ProbeOptions = {}, // injectable /dev, /sys, /proc roots (tests)
+  ) {}
 
   get running(): boolean {
     return this.proc !== null;
+  }
+
+  /** PID of our own ffmpeg child (excluded from "device busy" scans). */
+  get pid(): number | undefined {
+    return this.proc?.pid;
   }
 
   get droppedFrames(): number {
@@ -42,7 +46,7 @@ export class VirtualCam {
     if (this.proc && this.cfg && sameConfig(this.cfg, cfg)) return this.status();
     await this.stop();
     this.device = cfg.device;
-    this.error = validateConfig(cfg) ?? checkDevice(cfg.device);
+    this.error = validateConfig(cfg) ?? checkDevice(cfg.device, this.probe);
     if (this.error) return this.status();
 
     const args = [
@@ -59,8 +63,8 @@ export class VirtualCam {
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       this.error = err.code === 'ENOENT'
-        ? 'ffmpeg wurde nicht gefunden. Installieren mit: sudo dnf install ffmpeg'
-        : `ffmpeg konnte nicht gestartet werden: ${err.message}`;
+        ? `ffmpeg wurde nicht gefunden (benötigt für die virtuelle Kamera ${cfg.device}). Installieren mit: sudo dnf install ffmpeg`
+        : `ffmpeg (Ausgabe auf ${cfg.device}) konnte nicht gestartet werden: ${err.message}`;
       return this.status();
     }
 
@@ -79,10 +83,17 @@ export class VirtualCam {
       if (this.proc !== proc) return; // superseded by stop()/restart
       this.proc = null;
       this.cfg = null;
-      if (code !== 0 && signal !== 'SIGTERM') {
-        this.error = describeFfmpegFailure(this.stderrTail, cfg.device, code, signal);
-        console.error('[vcam]', this.error);
-      }
+      // Every exit that did not come from stop()/kill() is unexpected (even code 0 or an external SIGTERM).
+      const msg = describeFfmpegFailure(this.stderrTail, cfg, code, signal);
+      this.error = msg;
+      console.error('[vcam]', msg);
+      // Name whoever else has the device open (another producer, or a viewer locking the format).
+      try {
+        const others = findHolders([cfg.device], this.probe).get(cfg.device) ?? [];
+        if (others.length && this.error === msg && !this.proc) {
+          this.error = `${msg}\nGerät ${cfg.device} ist geöffnet von: ${formatHolders(others)}.`;
+        }
+      } catch { /* best effort */ }
     });
     return this.status();
   }
@@ -122,63 +133,46 @@ export class VirtualCam {
   }
 }
 
-/** /dev/video* device paths, numerically sorted. */
-export async function listVideoDevices(): Promise<string[]> {
-  try {
-    const names = await fs.promises.readdir('/dev');
-    return names
-      .filter((n) => /^video\d+$/.test(n))
-      .sort((a, b) => Number(a.slice(5)) - Number(b.slice(5)))
-      .map((n) => `/dev/${n}`);
-  } catch {
-    return [];
-  }
-}
-
 function sameConfig(a: VcamConfig, b: VcamConfig): boolean {
   return a.device === b.device && a.width === b.width && a.height === b.height && a.fps === b.fps;
 }
 
 function validateConfig(c: VcamConfig): string | undefined {
+  if (!/^\/dev\/video\d+$/.test(c.device)) return `Ungültiges Gerät "${c.device}" (erwartet z. B. /dev/video10).`;
+  // yuv420p subsamples chroma 2x2 -> width and height must be even.
   const okDim = (n: number) => Number.isInteger(n) && n >= 16 && n <= 4096 && n % 2 === 0;
-  if (!okDim(c.width) || !okDim(c.height)) return `Ungültige Auflösung ${c.width}x${c.height} (gerade Werte zwischen 16 und 4096 erforderlich).`;
-  if (!(c.fps >= 1 && c.fps <= 120)) return `Ungültige Bildrate ${c.fps} (1–120).`;
-  if (!/^\/dev\/video\d+$/.test(c.device)) return `Ungültiges Gerät "${c.device}" (erwartet z.B. /dev/video10).`;
+  if (!okDim(c.width) || !okDim(c.height)) {
+    return `Ungültige Auflösung ${c.width}x${c.height} für ${c.device} (gerade Werte zwischen 16 und 4096 erforderlich).`;
+  }
+  if (!(Number.isFinite(c.fps) && c.fps >= 1 && c.fps <= 120)) return `Ungültige Bildrate ${c.fps} für ${c.device} (1–120).`;
   return undefined;
 }
 
-/** Returns a German error message if the device is missing, not writable or not a loopback device. */
-function checkDevice(device: string): string | undefined {
-  let st: fs.Stats;
-  try {
-    st = fs.statSync(device);
-  } catch {
-    return `Das Gerät ${device} existiert nicht – das Kernelmodul v4l2loopback ist vermutlich nicht geladen.\n${MODPROBE_HINT}`;
-  }
-  if (!st.isCharacterDevice()) return `${device} ist kein Video-Gerät.`;
-  try {
-    fs.accessSync(device, fs.constants.W_OK);
-  } catch {
-    return `Keine Schreibrechte auf ${device}. Benutzer zur Gruppe "video" hinzufügen:\n` +
-      '  sudo usermod -aG video $USER\n(danach ab- und wieder anmelden)';
-  }
-  // v4l2loopback devices live under /sys/devices/virtual; real webcams under the USB/PCI tree.
-  try {
-    const real = fs.realpathSync(path.join('/sys/class/video4linux', path.basename(device)));
-    if (!real.includes('/virtual/')) {
-      return `${device} ist eine echte Kamera, kein v4l2loopback-Gerät. Bitte das virtuelle Gerät wählen.\n${MODPROBE_HINT}`;
-    }
-  } catch { /* sysfs not readable: skip this check */ }
-  return undefined;
-}
-
-function describeFfmpegFailure(stderr: string, device: string, code: number | null, signal: NodeJS.Signals | null): string {
+/** German message for an unexpected ffmpeg exit; always names the device. Exported for tests. */
+export function describeFfmpegFailure(stderr: string, cfg: VcamConfig, code: number | null, signal: NodeJS.Signals | null): string {
+  const { device } = cfg;
   const tail = stderr.trim().split('\n').slice(-3).join('\n');
+  const withTail = (m: string) => m + (tail ? `\n\nffmpeg: ${tail}` : '');
   if (/Device or resource busy/i.test(stderr)) {
-    return `${device} wird bereits von einem anderen Programm beschrieben (z.B. OBS Virtual Camera).`;
+    return withTail(`${device} ist belegt: Ein anderes Programm sendet bereits Bilder an dieses Gerät ` +
+      '(z. B. die virtuelle Kamera von OBS). Jedes Programm mit virtueller Kamera braucht ein eigenes ' +
+      `v4l2loopback-Gerät.\n${VCAM_SETUP_HINT}`);
+  }
+  if (/Permission denied/i.test(stderr)) {
+    return withTail(`Keine Schreibrechte auf ${device}. Benutzer zur Gruppe "video" hinzufügen:\n` +
+      '  sudo usermod -aG video $USER\n(danach ab- und wieder anmelden)');
+  }
+  if (/No such file or directory|No such device/i.test(stderr)) {
+    return withTail(`Das Gerät ${device} ist verschwunden (v4l2loopback entladen?).\n${VCAM_SETUP_HINT}`);
   }
   if (/Invalid argument|Inappropriate ioctl/i.test(stderr)) {
-    return `ffmpeg kann nicht auf ${device} schreiben – ist es ein v4l2loopback-Gerät?\n${MODPROBE_HINT}` + (tail ? `\n\n${tail}` : '');
+    return withTail(`ffmpeg konnte auf ${device} das Bildformat ${cfg.width}×${cfg.height} (yuv420p, ${cfg.fps} FPS) ` +
+      'nicht einstellen. Mögliche Ursachen:\n' +
+      '• Das Format ist gesperrt, weil ein anderes Programm das Gerät noch offen hat – eine andere virtuelle ' +
+      'Kamera, oder ein Zuschauer (z. B. OBS-Quelle, Discord) mit der vorherigen Auflösung – oder weil ' +
+      'keep_format gesetzt ist. Abhilfe: dieses Programm bzw. die Quelle schließen und neu starten, ' +
+      'oder die vorherige Auflösung wählen.\n' +
+      `• ${device} ist kein v4l2loopback-Gerät.`);
   }
-  return `ffmpeg wurde beendet (${signal ?? `Code ${code}`}).` + (tail ? `\n${tail}` : '');
+  return withTail(`ffmpeg (Ausgabe auf ${device}) wurde unerwartet beendet (${signal ?? `Code ${code}`}).`);
 }

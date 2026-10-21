@@ -4,18 +4,17 @@ import type { AppContext, SectionModule } from '../context';
 import { button, codeBox, hint, iconButton, infoGrid, section, statusDot, subhead } from '../controls';
 import { h, setText, toggleClass } from '../dom';
 import { toast } from '../toast';
-
-const SETUP_INSTALL = 'sudo dnf install v4l2loopback';
-const SETUP_LOAD = 'sudo modprobe v4l2loopback devices=1 video_nr=10 card_label="VTube Linux" exclusive_caps=1';
-const SETUP_PERSIST =
-  'echo v4l2loopback | sudo tee /etc/modules-load.d/v4l2loopback.conf\n' +
-  'echo \'options v4l2loopback devices=1 video_nr=10 card_label="VTube Linux" exclusive_caps=1\' | sudo tee /etc/modprobe.d/v4l2loopback.conf';
+import type { VideoDeviceInfo } from '../../../shared/api';
+import { VCAM_DEFAULT_DEVICE, VCAM_SETUP } from '../../../shared/vcamSetup';
 
 export function outputSection(ctx: AppContext): SectionModule {
   const { ui, live, actions, store } = ctx;
 
   // --- OBS browser source ---------------------------------------------------------------------
-  const serverInfo = infoGrid([{ key: 'state', label: 'Server' }]);
+  const serverInfo = infoGrid([
+    { key: 'state', label: 'Server' },
+    { key: 'clients', label: 'OBS/Browser verbunden' },
+  ]);
   const url = codeBox('–', 'URL kopieren');
   const copyBtn = button('URL kopieren', {
     icon: 'copy', variant: 'primary', small: true,
@@ -42,6 +41,7 @@ export function outputSection(ctx: AppContext): SectionModule {
     else if (!s) serverInfo.set('state', h('span', { class: 'with-dot' }, statusDot('warn'), 'Unbekannt'));
     else if (s.running) serverInfo.set('state', h('span', { class: 'with-dot' }, statusDot('ok'), `Läuft auf Port ${s.port}`));
     else serverInfo.set('state', h('span', { class: 'with-dot' }, statusDot('error'), 'Gestoppt'));
+    serverInfo.set('clients', enabled && s?.running && typeof s.clients === 'number' ? String(s.clients) : '–');
     url.setText(s?.url && s.running ? s.url : '–');
     copyBtn.disabled = openBtn.disabled = !(s?.running && s.url);
     serverError.textContent = s?.error ?? '';
@@ -49,28 +49,99 @@ export function outputSection(ctx: AppContext): SectionModule {
   };
   ctx.on('server', renderServer);
   ui.bind(renderServer);
+  // Keep the "OBS/Browser verbunden" count live while this section is open.
+  setInterval(() => {
+    if (sec.open && document.visibilityState === 'visible' && store.value.output.browserSource.enabled) {
+      void actions.refreshServerInfo();
+    }
+  }, 3000);
 
   // --- Virtual camera ------------------------------------------------------------------------
+  // The effective device comes from main (live.vcam.device/deviceSource): --vcam-device >
+  // VTUBE_CAM_DEVICE > setting > /dev/video10. The UI never picks a device by itself.
+  let devices: VideoDeviceInfo[] | null = null; // null = not listed yet
+  const fixedBy = (): string | null =>
+    live.vcam.deviceSource === 'cli' ? '--vcam-device' : live.vcam.deviceSource === 'env' ? 'VTUBE_CAM_DEVICE' : null;
+  const currentDevice = () => live.vcam.device || store.value.output.virtualCam.device;
+  const devLabel = (d: VideoDeviceInfo) => `${d.label || 'ohne Namen'} – ${d.path}`;
+  const holderText = (d: VideoDeviceInfo) => d.busyBy.map((b) => `${b.name} (PID ${b.pid})`).join(', ');
+
   const devRefresh = iconButton('refresh', 'Videogeräte aktualisieren', () => void loadDevices(true));
   const devInput = ui.text({
     label: 'Gerät',
-    hint: 'v4l2loopback-Gerät, z. B. /dev/video10 (Auswahl oder freie Eingabe)',
-    placeholder: '/dev/video10',
-    get: (s) => s.output.virtualCam.device,
+    hint: `v4l2loopback-Gerät, in das VTube Linux schreibt, z. B. ${VCAM_DEFAULT_DEVICE} (Auswahl oder freie Eingabe). ` +
+      'Jedes Programm mit virtueller Kamera braucht ein eigenes Gerät.',
+    placeholder: VCAM_DEFAULT_DEVICE,
+    // Fixed by CLI/env: show the effective device, read-only (the stored setting is left untouched).
+    get: (s) => (fixedBy() ? currentDevice() : s.output.virtualCam.device),
     set: (v) => ({ output: { virtualCam: { device: v } } }),
+    enabled: () => !fixedBy(),
     extra: devRefresh,
   });
+  const devInfo = h('p', { class: 'hint hidden' });
+  const devWarn = h('div', { class: 'alert alert-warn hidden' });
+
+  const renderDevInfo = () => {
+    const v = live.vcam;
+    const dev = currentDevice();
+    const fixed = fixedBy();
+    const info: string[] = [];
+    const warn: string[] = [];
+    if (fixed) info.push(`Festgelegt durch ${fixed} – die Einstellung wird ignoriert.`);
+    if (devices) {
+      const d = devices.find((x) => x.path === dev);
+      const loop = devices.filter((x) => x.loopback);
+      if (!d) {
+        warn.push(`${dev} existiert nicht: v4l2loopback ist nicht geladen oder hat andere Gerätenummern ` +
+          '(z. B. weil OBS das Modul selbst mit nur einem Gerät geladen hat). Siehe „Einrichtung“ unten.' +
+          (loop.length ? `\nVorhandene virtuelle Kameras: ${loop.map(devLabel).join(', ')}` : ''));
+      } else if (!d.loopback && !d.label) {
+        info.push(`Treiber von ${dev} unbekannt (sysfs nicht lesbar).`);
+      } else if (!d.loopback) {
+        warn.push(`${dev}${d.label ? ` („${d.label}“)` : ''} ist eine echte Kamera, kein v4l2loopback-Gerät – ` +
+          'dorthin kann VTube Linux nicht senden.');
+      } else {
+        info.push(`„${d.label || '?'}“ (v4l2loopback) – unter diesem Namen erscheint die Kamera in OBS, Discord usw.`);
+        if (d.busyBy.length && v.running) info.push(`Zuschauer: ${holderText(d)}.`);
+        else if (d.busyBy.length) {
+          warn.push(`${dev} ist belegt von ${holderText(d)}. Ein Zuschauer (z. B. OBS-Quelle, Discord) ist in Ordnung; ` +
+            'ist es eine andere virtuelle Kamera, braucht VTube Linux ein eigenes Gerät.');
+        }
+        if (/\bobs\b/i.test(d.label)) {
+          warn.push(`Achtung: ${dev} heißt „${d.label}“ und ist für die virtuelle Kamera von OBS gedacht. ` +
+            'Startet OBS seine virtuelle Kamera, schreiben beide Programme in dasselbe Gerät. ' +
+            'Für VTube Linux ein eigenes Gerät anlegen (siehe „Einrichtung“).');
+        }
+      }
+    }
+    setText(devInfo, info.join(' '));
+    toggleClass(devInfo, 'hidden', info.length === 0);
+    setText(devWarn, warn.join('\n'));
+    toggleClass(devWarn, 'hidden', warn.length === 0);
+  };
+
   async function loadDevices(manual = false): Promise<void> {
     try {
-      const list = await window.vtube.listVideoDevices();
-      devInput.setSuggestions(list);
-      if (manual) toast(list.length ? `Gefunden: ${list.join(', ')}` : 'Keine Videogeräte gefunden.', list.length ? 'info' : 'warning', 3000);
+      devices = await window.vtube.listVideoDevices();
+      const running = live.vcam.running ? live.vcam.device : null;
+      // Only v4l2loopback devices are offered; real cameras can still be typed (and get rejected).
+      devInput.setSuggestions(devices.filter((d) => d.loopback).map((d) => ({
+        value: d.path,
+        label: devLabel(d) + (d.path === running ? ' (VTube Linux sendet)'
+          : d.busyBy.length ? ` (belegt von ${[...new Set(d.busyBy.map((b) => b.name))].join(', ')})` : ''),
+      })));
+      renderDevInfo();
+      if (manual) {
+        const loop = devices.filter((d) => d.loopback);
+        toast(loop.length ? `Virtuelle Kameras: ${loop.map(devLabel).join(', ')}` : 'Keine v4l2loopback-Geräte gefunden – siehe „Einrichtung“.',
+          loop.length ? 'info' : 'warning', 4000);
+      }
     } catch (err) {
       if (manual) toast('Videogeräte konnten nicht aufgelistet werden.', 'error');
       console.warn('[ui] listVideoDevices failed', err);
     }
   }
-  void loadDevices();
+  // First listing happens in the initial renderVcam() below.
 
   const vcamBtn = button('Starten', { icon: 'play', variant: 'primary' });
   vcamBtn.addEventListener('click', () => {
@@ -81,22 +152,41 @@ export function outputSection(ctx: AppContext): SectionModule {
   const vcamError = h('div', { class: 'alert alert-error hidden' });
   const setup = h('details', { class: 'setup' },
     h('summary', null, 'Einrichtung (einmalig): v4l2loopback'),
-    hint('1. Kernel-Modul installieren (Fedora, benötigt RPM Fusion):'),
-    codeBox(SETUP_INSTALL).el,
-    hint('2. Virtuelle Kamera anlegen (nach jedem Neustart nötig, siehe 3.):'),
-    codeBox(SETUP_LOAD).el,
-    hint('3. Optional automatisch beim Systemstart laden:'),
-    codeBox(SETUP_PERSIST).el,
-    hint('Danach in OBS, Discord, Zoom usw. die Kamera „VTube Linux“ auswählen.'));
+    hint('Jedes Programm mit eigener virtueller Kamera (OBS, VTube Linux, …) braucht ein eigenes Gerät, ' +
+      'sonst überschreiben sie sich gegenseitig. Der Name („VTube Linux“) gehört zum Gerät, nicht zum Programm. ' +
+      `VTube Linux schreibt nur in das oben eingestellte Gerät (Standard ${VCAM_DEFAULT_DEVICE}). ` +
+      'Die virtuelle Kamera von OBS nimmt das erste freie Gerät – deshalb bekommt OBS die kleinere Nummer (/dev/video9).'),
+    hint('1. Kernel-Modul installieren (Fedora/Nobara, benötigt RPM Fusion):'),
+    codeBox(VCAM_SETUP.install).el,
+    hint('2. Ein bereits geladenes Modul entladen (z. B. von OBS mit nur einem Gerät geladen). ' +
+      'Vorher OBS, Discord, Browser usw. schließen, sonst „Module v4l2loopback is in use“:'),
+    codeBox(VCAM_SETUP.unload).el,
+    hint('3. Zwei Geräte anlegen – /dev/video9 „OBS Virtual Camera“ und /dev/video10 „VTube Linux“ ' +
+      '(nach jedem Neustart nötig, siehe 4.):'),
+    codeBox(VCAM_SETUP.load).el,
+    hint('4. Optional dauerhaft beim Systemstart mit diesen Einstellungen laden:'),
+    codeBox(VCAM_SETUP.persist).el,
+    hint('Danach in OBS, Discord, Zoom usw. die Kamera „VTube Linux“ auswählen. ' +
+      'Kontrolle: App mit --list-devices starten (zeigt alle Geräte und wer sie benutzt).'));
 
+  let devKey = '';
   const renderVcam = () => {
     const v = live.vcam;
+    // Device/state changed -> re-list devices (labels, users) and refresh the (possibly fixed) input.
+    const key = `${v.device}|${v.deviceSource}|${v.running}|${v.error ?? ''}`;
+    if (key !== devKey) {
+      const fixedChanged = devKey.split('|')[1] !== String(v.deviceSource) || devKey.split('|')[0] !== v.device;
+      devKey = key;
+      if (fixedChanged) ui.refreshAll();
+      renderDevInfo();
+      void loadDevices();
+    }
     vcamBtn.disabled = v.busy;
     vcamBtn.className = `btn ${v.running ? 'btn-danger' : 'btn-primary'}`;
     vcamBtn.replaceChildren(...button(v.busy ? (v.running ? 'Stoppe…' : 'Starte…') : v.running ? 'Stoppen' : 'Starten', { icon: v.running ? 'stop' : 'play' }).childNodes);
     vcamState.replaceChildren(
       statusDot(v.running ? 'ok' : v.error ? 'error' : 'off'),
-      h('span', null, v.running ? `Sendet an ${v.device || store.value.output.virtualCam.device}` : v.error ? 'Fehler' : 'Gestoppt'));
+      h('span', null, v.running ? `Sendet an ${currentDevice()}${fixedBy() ? ' (festgelegt)' : ''}` : v.error ? 'Fehler' : 'Gestoppt'));
     setText(vcamError, v.error ?? '');
     toggleClass(vcamError, 'hidden', !v.error);
     if (v.error && !setup.open) setup.open = true;
@@ -129,6 +219,8 @@ export function outputSection(ctx: AppContext): SectionModule {
       h('li', null, 'Hintergrund ist automatisch ', h('b', null, 'transparent'), ' – kein Chroma-Key nötig.')),
     subhead('Virtuelle Kamera'),
     devInput.el,
+    devInfo,
+    devWarn,
     ui.segmented<string>({
       label: 'Auflösung',
       stacked: true,

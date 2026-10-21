@@ -250,7 +250,7 @@ export class Controls {
   }
 
   /** Free text with suggestions (datalist), committed on change/Enter. */
-  text(o: BaseOpts<string> & { placeholder?: string; extra?: HTMLElement }): { el: HTMLElement; setSuggestions(v: string[]): void } {
+  text(o: BaseOpts<string> & { placeholder?: string; extra?: HTMLElement }): { el: HTMLElement; setSuggestions(v: (string | { value: string; label?: string })[]): void } {
     const id = nextId('tx');
     const listId = `${id}-list`;
     const list = h('datalist', { id: listId });
@@ -274,7 +274,9 @@ export class Controls {
       el: row,
       setSuggestions: (vals) => {
         list.textContent = '';
-        for (const v of vals) list.appendChild(h('option', { value: v }));
+        for (const v of vals) {
+          list.appendChild(typeof v === 'string' ? h('option', { value: v }) : h('option', { value: v.value, label: v.label }));
+        }
       },
     };
   }

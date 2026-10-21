@@ -7,7 +7,20 @@ import type { DeepPartial, Settings } from '../shared/settings';
 import type { AvatarPose } from '../shared/types';
 import { MIME, OutputServer } from './server';
 import { SettingsStore } from './settingsStore';
-import { listVideoDevices, VirtualCam } from './virtualCam';
+import { VirtualCam } from './virtualCam';
+import { formatDeviceList, listVideoDevices, resolveVcamDevice, VCAM_DEVICE_ENV, VCAM_DEVICE_FLAG, wantsDeviceList, type ResolvedDevice } from './vcamDevice';
+
+// `--list-devices` / `--vcam-list`: print the video devices and exit – before the single-instance
+// lock or any window (plain fs; settings are only read).
+if (wantsDeviceList(process.argv)) {
+  let configured: string | undefined;
+  try {
+    configured = new SettingsStore(path.join(app.getPath('userData'), 'settings.json')).get().output.virtualCam.device;
+  } catch { /* defaults */ }
+  fs.writeSync(1, formatDeviceList(listVideoDevices(), resolveVcamDevice(process.argv, process.env, configured)));
+  app.exit(0);
+  process.exit(0);
+}
 
 // ---------------------------------------------------------------------------
 // Command line / Chromium switches (must happen before 'ready')
@@ -165,10 +178,25 @@ async function applySettings(patch: DeepPartial<Settings>): Promise<Settings> {
   return store.get();
 }
 
+/** The ONLY place the virtual camera device is determined (CLI > env > settings > default).
+ *  Never auto-selects a device. */
+function vcamDevice(): ResolvedDevice {
+  return resolveVcamDevice(process.argv, process.env, store.get().output.virtualCam.device);
+}
+
+/** vcam.status() plus the effective device and where it comes from. */
+function vcamStatus(): VcamStatus {
+  const r = vcamDevice();
+  const st = vcam.status();
+  return { ...st, device: st.running ? st.device : r.device, deviceSource: r.source };
+}
+
 /** Start/restart the virtual camera from settings. `enabled` mirrors success, so a failed start
  *  (missing module/ffmpeg) is not retried on every launch; the error stays in vcam.status(). */
 async function startVcam(): Promise<VcamStatus> {
-  const st = await vcam.start(store.get().output.virtualCam);
+  const { width, height, fps } = store.get().output.virtualCam;
+  await vcam.start({ device: vcamDevice().device, width, height, fps });
+  const st = vcamStatus();
   const enabled = st.running;
   if (store.get().output.virtualCam.enabled !== enabled) store.update({ output: { virtualCam: { enabled } } });
   if (st.error) console.error('[vcam]', st.error);
@@ -211,7 +239,7 @@ async function readModel(p: string, register: boolean): Promise<ModelFile> {
     throw new Error('Keine gültige VRM-Datei (glTF-Binärformat erwartet).');
   }
 
-  server.setModel(buf, `${abs}:${st.size}:${st.mtimeMs}`);
+  server.setModel(buf, `${abs}:${st.size}:${st.mtimeMs}`, path.basename(abs));
   if (register) {
     const recent = [abs, ...store.get().model.recent.filter((r) => r !== abs && fs.existsSync(r))].slice(0, MAX_RECENT);
     store.update({ model: { lastPath: abs, recent } });
@@ -276,10 +304,11 @@ function registerIpc(): void {
   handle('vcam:start', (): Promise<VcamStatus> => startVcam());
   handle('vcam:stop', async (): Promise<VcamStatus> => {
     if (store.get().output.virtualCam.enabled) store.update({ output: { virtualCam: { enabled: false } } });
-    return vcam.stop();
+    await vcam.stop();
+    return vcamStatus();
   });
-  handle('vcam:status', (): VcamStatus => vcam.status());
-  handle('vcam:devices', () => listVideoDevices());
+  handle('vcam:status', (): VcamStatus => vcamStatus());
+  handle('vcam:devices', () => listVideoDevices({ excludePids: vcam.pid ? [vcam.pid] : [] }));
   ipcMain.on('vcam:frame', (e, data: unknown) => {
     if (!trusted(e)) return;
     const buf = toBuffer(data);
@@ -334,6 +363,11 @@ void app.whenReady().then(async () => {
 
   registerIpc();
   createWindow();
+
+  const dev = vcamDevice();
+  if (dev.source === 'cli' || dev.source === 'env') {
+    console.log(`[vcam] Gerät ${dev.device} festgelegt durch ${dev.source === 'cli' ? VCAM_DEVICE_FLAG : VCAM_DEVICE_ENV}`);
+  }
 
   const s = store.get();
   server.setView(s.view);

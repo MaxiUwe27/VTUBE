@@ -32,12 +32,47 @@ Selbst bauen: `npm ci && npm run dist` → `release/VTube-Linux-<version>-x86_64
 - **Browserquelle (empfohlen):** URL `http://127.0.0.1:39540/`, 1920×1080. Für Transparenz in der App
   „Ansicht → Hintergrund → Transparent“ wählen, oder URL-Parameter `?bg=transparent` nutzen.
 - **Fenstererfassung + Chroma-Key:** Hintergrund Grün (Standard), Panel mit `Tab` ausblenden.
-- **Virtuelle Kamera** (für Discord etc.):
-  ```bash
-  sudo dnf install v4l2loopback
-  sudo modprobe v4l2loopback devices=1 video_nr=10 card_label="VTube Linux" exclusive_caps=1
-  ```
-  Dann in der App „Ausgabe → Virtuelle Kamera“ starten (Gerät `/dev/video10`). Benötigt `ffmpeg`.
+- **Virtuelle Kamera** (für Discord etc.): siehe nächster Abschnitt.
+
+## Virtuelle Kamera (v4l2loopback)
+
+**Jedes Programm mit eigener virtueller Kamera braucht ein eigenes Gerät.** Ein v4l2loopback-Gerät
+trägt genau einen Bildstrom, und sein Name (`card_label`) gehört zum Gerät, nicht zum Programm.
+Die virtuelle Kamera von OBS fragt nicht nach – sie nimmt das erste freie v4l2loopback-Gerät.
+Gibt es nur eines, schreiben OBS und VTube Linux in dasselbe Gerät: Bild kaputt, falscher Name,
+oder eines der Programme startet nicht. VTube Linux selbst wählt **nie** automatisch ein Gerät,
+sondern schreibt nur in das eingestellte (Standard `/dev/video10`).
+
+Darum zwei Geräte anlegen; OBS bekommt die kleinere Nummer, damit es sein eigenes zuerst findet:
+```bash
+sudo dnf install v4l2loopback ffmpeg
+sudo modprobe -r v4l2loopback   # nur nötig, falls schon geladen (z. B. von OBS); vorher OBS/Discord/Browser schließen
+sudo modprobe v4l2loopback devices=2 video_nr=9,10 card_label="OBS Virtual Camera,VTube Linux" exclusive_caps=1,1
+```
+Dauerhaft (beim Systemstart mit diesen Optionen laden):
+```bash
+echo v4l2loopback | sudo tee /etc/modules-load.d/v4l2loopback.conf
+echo 'options v4l2loopback devices=2 video_nr=9,10 card_label="OBS Virtual Camera,VTube Linux" exclusive_caps=1,1' | sudo tee /etc/modprobe.d/v4l2loopback.conf
+```
+Ergebnis: `/dev/video9` „OBS Virtual Camera“ (für OBS), `/dev/video10` „VTube Linux“ (für diese App).
+In Discord/OBS-Quelle/Zoom dann die Kamera „VTube Linux“ wählen.
+
+**Gerät festlegen** (Vorrang von oben nach unten):
+
+| Weg | Beispiel |
+|---|---|
+| Startoption | `./VTube-Linux-*.AppImage --vcam-device /dev/video10` (oder `--vcam-device=/dev/video10`) |
+| Umgebungsvariable | `VTUBE_CAM_DEVICE=/dev/video10 ./VTube-Linux-*.AppImage` |
+| App | „Ausgabe → Virtuelle Kamera → Gerät“ (Auswahl zeigt Name, Pfad und ob belegt) |
+| Standard | `/dev/video10` |
+
+Ist das Gerät per Startoption/Umgebungsvariable festgelegt, zeigt die App es als „festgelegt“ an und
+die Einstellung ist gesperrt. Vor dem Start prüft die App: Gerät vorhanden, wirklich v4l2loopback,
+Schreibrechte, und ob schon ein anderes Programm hineinschreibt – dann bricht sie mit Meldung
+(Programmname + PID) ab, statt das andere Bild zu überschreiben.
+
+**Geräte anzeigen:** `./VTube-Linux-*.AppImage --list-devices` (Alias `--vcam-list`) listet alle
+v4l2loopback-Geräte mit Pfad, Name und benutzenden Prozessen und beendet sich sofort (kein Fenster).
 
 ## Probleme
 
@@ -47,6 +82,7 @@ Selbst bauen: `npm ci && npm run dist` → `release/VTube-Linux-<version>-x86_64
 | Tracking langsam | In „Kamera & Tracking“ GPU-Beschleunigung an/aus testen; 640×480 reicht völlig |
 | Avatar schaut schräg | Neu kalibrieren; „Spiegeln“ prüfen |
 | Mund bewegt sich beim Reden zu wenig | Lip-Sync aktivieren, Mund-Empfindlichkeit erhöhen |
+| Virtuelle Kamera heißt „OBS Virtual Camera“ / Bild von OBS kaputt | Nur ein v4l2loopback-Gerät vorhanden → zwei anlegen (siehe oben), `--list-devices` prüfen |
 | AppImage startet nicht (FUSE) | `sudo dnf install fuse fuse-libs` oder `--appimage-extract-and-run` |
 
 Einstellungen: `~/.config/VTube Linux/settings.json`.

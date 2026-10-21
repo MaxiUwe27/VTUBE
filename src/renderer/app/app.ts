@@ -387,7 +387,7 @@ async function bootstrap(): Promise<void> {
         toast(st.error || 'Die virtuelle Kamera konnte nicht gestartet werden.', 'error');
       }
     } catch (err) {
-      setVcam({ running: false, device: store.value.output.virtualCam.device, error: errorText(err) });
+      setVcam({ running: false, device: live.vcam.device, deviceSource: live.vcam.deviceSource, error: errorText(err) });
       toast(`Virtuelle Kamera: ${errorText(err)}`, 'error');
     } finally {
       setVcamBusy(false);
@@ -415,7 +415,8 @@ async function bootstrap(): Promise<void> {
       if (live.vcam.running && !st.running && !restarting) {
         toast(st.error ? `Virtuelle Kamera beendet: ${st.error}` : 'Die virtuelle Kamera wurde beendet.', 'error');
       }
-      if (st.running !== live.vcam.running || st.error !== live.vcam.error || st.device !== live.vcam.device) setVcam(st);
+      if (st.running !== live.vcam.running || st.error !== live.vcam.error || st.device !== live.vcam.device ||
+        st.deviceSource !== live.vcam.deviceSource) setVcam(st);
     } catch {
       /* ignore transient IPC errors */
     }

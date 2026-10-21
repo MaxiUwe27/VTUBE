@@ -85,7 +85,7 @@ export class AvatarRenderer {
   private readback: Readback | null = null;
   private resizeObserver: ResizeObserver | null = null;
 
-  private view: ViewSettings = structuredClone(DEFAULT_SETTINGS.view);
+  private view: ViewSettings = cloneJson(DEFAULT_SETTINGS.view);
   private bgColor = new THREE.Color('#00ff00');
   private model: LoadedModel | null = null;
   private loadToken = 0;
@@ -162,6 +162,11 @@ export class AvatarRenderer {
 
   get fps(): number {
     return this._fps;
+  }
+
+  /** True while the WebGL context is lost (GPU reset / driver issue); nothing is drawn then. */
+  get isContextLost(): boolean {
+    return this.contextLost;
   }
 
   async loadVRM(source: ArrayBuffer | string): Promise<VrmInfo> {
@@ -241,7 +246,7 @@ export class AvatarRenderer {
   setView(view: ViewSettings): void {
     const prevArm = this.view.armPose;
     // Tolerate partial/older view objects by filling gaps with defaults.
-    this.view = structuredClone(mergeSettings(DEFAULT_SETTINGS.view, view ?? {}));
+    this.view = cloneJson(mergeSettings(DEFAULT_SETTINGS.view, view ?? {}));
     const v = this.view;
     if (!this.restPose || prevArm !== v.armPose) this.restPose = buildRestPose(v.armPose);
 
@@ -700,6 +705,11 @@ function disposeObject(obj: THREE.Object3D): void {
   } catch {
     /* ignore */
   }
+}
+
+/** Deep copy of plain JSON data (structuredClone needs Chromium 98+; OBS ships older CEF builds). */
+function cloneJson<T>(v: T): T {
+  return JSON.parse(JSON.stringify(v)) as T;
 }
 
 function safeColor(c: string | undefined, fallback: string): string {

@@ -19,8 +19,8 @@ Mikrofon ─► LipSync (WebAudio)                    ──► VisemeFrame ┤
 
 | Pfad | Inhalt |
 |---|---|
-| `src/shared/` | Verträge: `types.ts`, `settings.ts`, `api.ts` (nur nach Absprache ändern) |
-| `src/main/` | `main.ts`, `preload.ts`, `settingsStore.ts`, `server.ts`, `virtualCam.ts` |
+| `src/shared/` | Verträge: `types.ts`, `settings.ts`, `api.ts` (nur nach Absprache ändern); `vcamSetup.ts` (v4l2loopback-Befehle für UI/Meldungen) |
+| `src/main/` | `main.ts`, `preload.ts`, `settingsStore.ts`, `server.ts`, `virtualCam.ts`, `vcamDevice.ts` (Gerät der virtuellen Kamera: Auflösung CLI/Env/Einstellung, Prüfungen, `--list-devices`) |
 | `src/renderer/avatar/` | `AvatarRenderer.ts` (+ Hilfsdateien) |
 | `src/renderer/output/` | `output.ts` (OBS-Seite), `src/renderer/output.html` |
 | `src/renderer/tracking/` | `FaceTracker.ts` |
