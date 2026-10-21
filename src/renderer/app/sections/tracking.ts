@@ -121,16 +121,14 @@ export function trackingSection(ctx: AppContext): SectionModule {
     }
   });
   const urlState = h('div', { class: 'calib-state' });
-  const urlBox = h('div', { class: 'url-source' },
-    h('div', { class: 'ctl ctl-input' },
-      h('label', { class: 'ctl-label', for: urlInputId, title: 'Adresse einer Webseite oder eines Video-Streams' }, 'Adresse'),
-      h('div', { class: 'select-wrap' }, urlInput, urlList, connectBtn)),
+  // Full-width address row (URLs are long): label above, input + button below.
+  const urlBox = h('div', { class: 'url-source', style: { margin: '2px 0 6px' } },
+    h('label', { class: 'ctl-label', for: urlInputId, title: 'Adresse einer Webseite oder eines Video-Streams' }, 'Adresse der Browserquelle'),
+    h('div', { class: 'select-wrap', style: { margin: '6px 0' } }, urlInput, urlList, connectBtn),
     urlState,
-    hint('Handy als Webcam: App „IP Webcam“ (Android) → ', h('code', null, 'http://192.168.x.x:8080/video'),
-      ', DroidCam → ', h('code', null, 'http://IP:4747/video'), ', oder ein VDO.Ninja-Link (',
-      h('code', null, 'https://vdo.ninja/?view=…'), '). Auch MP4/WebM-Videos und normale Webseiten gehen. ',
-      'Handy und PC müssen im selben WLAN sein. RTSP wird nicht unterstützt; selbst signierte HTTPS-Zertifikate ',
-      'werden abgelehnt (dann http:// verwenden). Auflösung/FPS unten = Größe und Bildrate der unsichtbaren Seite.'),
+    hint('Handy als Webcam (gleiches WLAN): App „IP Webcam“ → ', h('code', null, 'http://192.168.x.x:8080/video'),
+      ' · DroidCam → ', h('code', null, 'http://IP:4747/video'), ' · VDO.Ninja → ', h('code', null, 'https://vdo.ninja/?view=…'),
+      ' · auch MP4/WebM-Videos und Webseiten. Nicht möglich: RTSP und selbst signierte HTTPS-Zertifikate (dann http:// nehmen).'),
   );
   let shownRecent = '';
   ui.bind(() => {

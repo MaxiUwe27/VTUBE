@@ -32,6 +32,28 @@ Selbst bauen: `npm ci && npm run dist` → `release/VTube-Linux-<version>-x86_64
    (Frontal, Leicht links/rechts, Profil links/rechts, Von oben – „links/rechts“ = Kamera vom Zuschauer aus gesehen).
    Die Ansicht gilt genauso für OBS-Browserquelle und virtuelle Kamera.
 
+## Handy oder Browserquelle als Kamera
+
+Statt einer Webcam kann das Tracking auch ein Bild aus dem Netz verwenden: In „Kamera & Tracking“
+bei **Kamera** ganz unten **„Browserquelle (URL) …“** wählen, die Adresse einfügen, **Verbinden**.
+Die Seite wird unsichtbar (wie eine OBS-Browserquelle) geladen; „Auflösung“ und „Kamera-FPS“ legen
+Größe und Bildrate dieser Seite fest. Funktionierende Adressen werden als Vorschläge gemerkt.
+
+| Quelle | Adresse |
+|---|---|
+| Android-App **IP Webcam** | `http://<Handy-IP>:8080/video` (IP steht in der App unten nach „Server starten“) |
+| **DroidCam** (Android/iOS) | `http://<Handy-IP>:4747/video` |
+| **VDO.Ninja** (Handy-Browser, auch iPhone) | Am Handy auf vdo.ninja „Add your camera“, den **View-Link** `https://vdo.ninja/?view=…` einfügen |
+| Video-Datei / Stream | direkte `http(s)://…`-Adresse einer MP4/WebM-Datei oder eines MJPEG-Streams |
+
+Tipps: Handy und PC im **selben WLAN**; das Handy am besten hochkant in einer Halterung, Gesicht
+gut ausgeleuchtet; Displaysperre des Handys aus. Bricht der Stream kurz ab, verbindet sich die App
+von selbst neu; kommen 15 s lang keine Bilder, zeigt sie einen Fehler mit „Erneut versuchen“.
+**Nicht möglich:** RTSP/RTMP (`rtsp://…`, Chromium kann das nicht – in der App die HTTP-Adresse
+nehmen) und HTTPS mit selbst signiertem Zertifikat (z. B. `https://` von IP Webcam – stattdessen
+`http://` verwenden). Die Seite läuft abgeschottet: ohne Kamera-/Mikrofonrechte, ohne Pop-ups und
+Downloads, stumm.
+
 ## OBS
 
 - **Browserquelle (empfohlen):** URL `http://127.0.0.1:39540/`, 1920×1080. Der Hintergrund ist dort standardmäßig
@@ -88,6 +110,7 @@ v4l2loopback-Geräte mit Pfad, Name und benutzenden Prozessen und beendet sich s
 |---|---|
 | OBS-Browserquelle / Browser-Test leer oder weiß | Die Seite zeigt oben links den Grund (keine Verbindung, kein Modell, WebGL fehlt …). „WebGL nicht verfügbar“ in OBS: *Einstellungen → Erweitert → Browserquellen-Hardwarebeschleunigung* an, OBS neu starten. Diagnose: URL mit `?debug`, `http://127.0.0.1:39540/status`, AppImage im Terminal starten (zeigt Verbindungen/Ablehnungen). `?nostatus` blendet die Hinweise aus |
 | Schwarzes Fenster / Absturz beim Start (GPU) | `./VTube-Linux…AppImage --disable-gpu` oder `--ozone-platform=x11` |
+| Browserquelle: „Verbindung abgelehnt“ / „Keine Antwort“ | Läuft die Kamera-App auf dem Handy (Server gestartet, Bildschirm an)? Gleiches WLAN? IP und Port prüfen – die Adresse zuerst im normalen Browser am PC testen |
 | Tracking langsam | In „Kamera & Tracking“ GPU-Beschleunigung an/aus testen; 640×480 reicht völlig |
 | Avatar schaut schräg | Neu kalibrieren; „Spiegeln“ prüfen |
 | Mund bewegt sich beim Reden zu wenig | Lip-Sync aktivieren, Mund-Empfindlichkeit erhöhen |

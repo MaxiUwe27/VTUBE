@@ -91,6 +91,7 @@ export class UrlSource {
   private lastPaintAt = 0;
   private loadFailed = false;      // current load ended in an error page → its paints are not frames
   private isMedia = false;
+  private scaleFixed = false;
   private retryMs = RETRY_MIN_MS;
   private retryTimer: NodeJS.Timeout | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
@@ -118,6 +119,7 @@ export class UrlSource {
     this.stop();
     this.req = req;
     this.retryMs = RETRY_MIN_MS;
+    this.scaleFixed = false;
 
     const win = new BrowserWindow({
       show: false,
@@ -125,7 +127,6 @@ export class UrlSource {
       height: req.height,
       useContentSize: true,
       frame: false,
-      resizable: false,
       backgroundColor: '#000000',
       paintWhenInitiallyHidden: true,
       webPreferences: {
@@ -226,6 +227,7 @@ export class UrlSource {
         this.fail(req, `Der Server antwortet mit Fehler HTTP ${httpCode}${httpCode === 404 ? ' (Seite nicht gefunden – stimmt der Pfad, z. B. /video?)' : ''}.`);
         return;
       }
+      wc.setFrameRate(req.fps); // the paint rate resets with every new document
       void this.prepareDocument(wc, req);
     });
     wc.on('dom-ready', () => { if (this.current(req)) void this.prepareDocument(wc, req); });
@@ -250,13 +252,15 @@ export class UrlSource {
   /** Media documents (stream, image, video file): fill the viewport, loop videos. */
   private async prepareDocument(wc: WebContents, req: UrlSourceRequest): Promise<void> {
     try {
-      const type = await wc.executeJavaScript('document.contentType', false);
+      // mainFrame.executeJavaScript runs right away; webContents.executeJavaScript would wait for the
+      // load to finish, which never happens for an endless MJPEG stream.
+      const type = await wc.mainFrame.executeJavaScript('document.contentType', false);
       if (!this.current(req) || !isMediaType(type)) return;
       if (!this.isMedia) {
         this.isMedia = true;
         await wc.insertCSS(MEDIA_CSS, { cssOrigin: 'user' });
       }
-      await wc.executeJavaScript(MEDIA_JS, false);
+      await wc.mainFrame.executeJavaScript(MEDIA_JS, false);
     } catch {
       /* navigated away / destroyed meanwhile */
     }
@@ -270,6 +274,7 @@ export class UrlSource {
       this.retryMs = RETRY_MIN_MS;
       this.setState(req, 'connected');
     }
+    if (now - this.lastSendAt < 800 / req.fps) return; // backstop for setFrameRate (max fps)
     if (this.inFlight >= MAX_IN_FLIGHT) {
       if (now - this.lastSendAt < ACK_TIMEOUT_MS) return; // app window is behind → drop this frame
       this.inFlight = 0;
@@ -284,6 +289,13 @@ export class UrlSource {
       width = Math.round(width * s);
       height = Math.round(height * s);
       if (data.length !== width * height * 4) return;
+    }
+    // Scaled desktop (HiDPI / fractional scaling): the page renders width×scale pixels. Shrink the
+    // window once so the frames have the requested pixel size (less to copy, same as a webcam).
+    if (!this.scaleFixed && (Math.abs(width - req.width) > 2 || Math.abs(height - req.height) > 2)) {
+      this.scaleFixed = true;
+      const [cw, ch] = this.win!.getContentSize(); // DIP; bitmap px = DIP × scale factor
+      this.win!.setContentSize(Math.max(1, Math.round(req.width * cw / width)), Math.max(1, Math.round(req.height * ch / height)));
     }
     this.inFlight++;
     this.lastSendAt = now;
