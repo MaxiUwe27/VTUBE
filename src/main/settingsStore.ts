@@ -10,7 +10,7 @@ export class SettingsStore {
   private dirty = false;
 
   constructor(private readonly file: string, private readonly delayMs = 400) {
-    this.current = this.load();
+    this.current = SettingsStore.read(file, true);
   }
 
   get(): Settings {
@@ -42,11 +42,13 @@ export class SettingsStore {
     }
   }
 
-  private load(): Settings {
+  /** Settings from `file` merged over defaults, without creating a store. `repair` = false never
+   *  touches the file (read-only callers such as `--list-devices`); true renames a corrupt file aside. */
+  static read(file: string, repair = false): Settings {
     const defaults = structuredClone(DEFAULT_SETTINGS);
     let raw: string;
     try {
-      raw = fs.readFileSync(this.file, 'utf8');
+      raw = fs.readFileSync(file, 'utf8');
     } catch {
       return defaults; // first start
     }
@@ -56,8 +58,9 @@ export class SettingsStore {
       // Merging over defaults makes keys added in newer versions appear automatically.
       return sanitize(mergeSettings(defaults, parsed as DeepPartial<Settings>));
     } catch (e) {
+      if (!repair) return defaults;
       console.error('[settings] corrupt settings file, using defaults:', e);
-      try { fs.renameSync(this.file, `${this.file}.corrupt-${Date.now()}`); } catch { /* ignore */ }
+      try { fs.renameSync(file, `${file}.corrupt-${Date.now()}`); } catch { /* ignore */ }
       return defaults;
     }
   }

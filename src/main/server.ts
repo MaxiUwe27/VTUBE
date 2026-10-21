@@ -14,6 +14,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { ServerInfo } from '../shared/api';
 import type { ViewSettings } from '../shared/settings';
 import type { AvatarPose, OutputMessage } from '../shared/types';
+import { LatestQueue } from './serialQueue';
 
 const HOST = '127.0.0.1';
 /** Also listen on IPv6 loopback: Firefox/Chromium resolve `localhost` to ::1 first on Fedora. */
@@ -59,7 +60,9 @@ export class OutputServer {
 
   private model: Buffer | null = null;
   private modelKey: string | null = null;
-  private modelRev = 0;
+  /** Starts at a per-process epoch (ms since 1970): an output page that reconnects to a restarted app
+   *  must never see the same `/model.vrm?rev=N` again (it would keep its stale model). */
+  private modelRev = Date.now();
   private modelName: string | null = null;
   private rejected = { host: 0, origin: 0 };
   private lastRejectLog = new Map<string, number>();
@@ -68,6 +71,8 @@ export class OutputServer {
   private pendingPose: AvatarPose | null = null;
   private lastPoseAt = 0;
   private poseTimer: NodeJS.Timeout | null = null;
+  /** start()/stop() run strictly one after another; pending superseded requests are skipped. */
+  private readonly queue = new LatestQueue<ServerInfo>();
 
   constructor(private readonly opts: OutputServerOptions) {}
 
@@ -86,9 +91,23 @@ export class OutputServer {
     return this.wss?.clients.size ?? 0;
   }
 
-  /** (Re)start listening on `port`. Never throws; failures are reported in the returned info. */
-  async start(port: number): Promise<ServerInfo> {
-    await this.stop();
+  /** Listen on `port` (restarts if listening on another port; no-op if already listening on it).
+   *  Never throws; failures are reported in the returned info. Serialized with stop(): the last
+   *  request wins, so quick port changes never leak a listening server. */
+  start(port: number): Promise<ServerInfo> {
+    return this.queue.run(() => this.doStart(port));
+  }
+
+  async stop(): Promise<void> {
+    await this.queue.run(async () => {
+      await this.doStop();
+      return this.info;
+    });
+  }
+
+  private async doStart(port: number): Promise<ServerInfo> {
+    if (this.server && this.port === port) return this.info;
+    await this.doStop();
     this.port = port;
     this.error = undefined;
 
@@ -142,7 +161,7 @@ export class OutputServer {
     return this.info;
   }
 
-  async stop(): Promise<void> {
+  private async doStop(): Promise<void> {
     if (this.poseTimer) clearTimeout(this.poseTimer);
     this.poseTimer = null;
     this.pendingPose = null;

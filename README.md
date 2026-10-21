@@ -68,8 +68,11 @@ In Discord/OBS-Quelle/Zoom dann die Kamera „VTube Linux“ wählen.
 
 Ist das Gerät per Startoption/Umgebungsvariable festgelegt, zeigt die App es als „festgelegt“ an und
 die Einstellung ist gesperrt. Vor dem Start prüft die App: Gerät vorhanden, wirklich v4l2loopback,
-Schreibrechte, und ob schon ein anderes Programm hineinschreibt – dann bricht sie mit Meldung
-(Programmname + PID) ab, statt das andere Bild zu überschreiben.
+Schreibrechte. Dass andere Programme das Gerät geöffnet haben (z. B. OBS-Quelle oder Discord als
+Zuschauer), ist normal und verhindert den Start nicht – die App zeigt sie nur an („Geöffnet von: obs
+(PID …)“). Schreibt dort schon ein anderes Programm hinein (oder hält ein Zuschauer noch eine andere
+Auflösung fest), lehnt der Kernel ffmpeg ab; die App meldet dann den Grund und welche Programme
+(Name + PID) das Gerät geöffnet haben.
 
 **Geräte anzeigen:** `./VTube-Linux-*.AppImage --list-devices` (Alias `--vcam-list`) listet alle
 v4l2loopback-Geräte mit Pfad, Name und benutzenden Prozessen und beendet sich sofort (kein Fenster).

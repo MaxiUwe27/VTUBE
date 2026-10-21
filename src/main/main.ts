@@ -5,21 +5,43 @@ import * as path from 'node:path';
 import type { ModelFile, ServerInfo, VcamStatus } from '../shared/api';
 import type { DeepPartial, Settings } from '../shared/settings';
 import type { AvatarPose } from '../shared/types';
+import { LatestQueue } from './serialQueue';
 import { MIME, OutputServer } from './server';
 import { SettingsStore } from './settingsStore';
 import { VirtualCam } from './virtualCam';
-import { formatDeviceList, listVideoDevices, resolveVcamDevice, VCAM_DEVICE_ENV, VCAM_DEVICE_FLAG, wantsDeviceList, type ResolvedDevice } from './vcamDevice';
+import {
+  formatDeviceList, listVideoDevices, listVideoDevicesSync, resolveVcamDevice, VCAM_DEVICE_ENV, VCAM_DEVICE_FLAG,
+  wantsDeviceList, type ResolvedDevice,
+} from './vcamDevice';
+
+// A closed stdout/stderr (e.g. `vtube-linux | head`, terminal gone) must not turn console.log into
+// an uncaught EPIPE exception (Electron would show an error dialog).
+for (const stream of [process.stdout, process.stderr]) stream?.on?.('error', () => { /* ignore */ });
 
 // `--list-devices` / `--vcam-list`: print the video devices and exit – before the single-instance
-// lock or any window (plain fs; settings are only read).
+// lock or any window. Strictly read-only: settings are only read (a corrupt file is left alone).
 if (wantsDeviceList(process.argv)) {
   let configured: string | undefined;
   try {
-    configured = new SettingsStore(path.join(app.getPath('userData'), 'settings.json')).get().output.virtualCam.device;
+    configured = SettingsStore.read(path.join(app.getPath('userData'), 'settings.json')).output.virtualCam.device;
   } catch { /* defaults */ }
-  fs.writeSync(1, formatDeviceList(listVideoDevices(), resolveVcamDevice(process.argv, process.env, configured)));
+  writeAllSync(1, formatDeviceList(listVideoDevicesSync(), resolveVcamDevice(process.argv, process.env, configured)));
   app.exit(0);
   process.exit(0);
+}
+
+/** Write `text` to `fd`; stops silently if the reader went away (EPIPE) or the fd is unusable. */
+function writeAllSync(fd: number, text: string): void {
+  let buf = Buffer.from(text, 'utf8');
+  for (let tries = 0; buf.length > 0 && tries < 1000;) {
+    try {
+      buf = buf.subarray(fs.writeSync(fd, buf));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EAGAIN') return; // EPIPE, EBADF, …
+      tries++;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5); // non-blocking pipe full: wait briefly
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +109,15 @@ const rendererDir = path.join(appRoot, 'dist/renderer');
 const store = new SettingsStore(path.join(app.getPath('userData'), 'settings.json'));
 const server = new OutputServer({ rootDir: rendererDir });
 const vcam = new VirtualCam();
+/** Every virtual camera start/stop/restart goes through this queue (IPC, settings, auto-start). Each
+ *  operation brings the camera into the state wanted at the time it runs, so skipping superseded
+ *  ones ("last request wins") is safe. */
+const vcamOps = new LatestQueue<VcamStatus>();
 let win: BrowserWindow | null = null;
+let quitting = false;
+
+/** Window icon (X11 / taskbar without .desktop file). Packaged via package.json build.files. */
+const appIcon = ((p: string) => (fs.existsSync(p) ? p : undefined))(path.join(appRoot, 'build/icon.png'));
 
 const MAX_RECENT = 10;
 const MAX_MODEL_BYTES = 1024 * 1024 * 1024;
@@ -103,6 +133,7 @@ function createWindow(): void {
     minHeight: 600,
     backgroundColor: '#15151c',
     title: 'VTube Linux',
+    ...(appIcon ? { icon: appIcon } : {}),
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -167,14 +198,8 @@ async function applySettings(patch: DeepPartial<Settings>): Promise<Settings> {
   if (!same(prev.output.browserSource, next.output.browserSource)) await syncServer(next);
   if (!same(prev.view, next.view)) server.setView(next.view);
 
-  const pv = prev.output.virtualCam;
-  const nv = next.output.virtualCam;
-  if (pv.enabled !== nv.enabled) {
-    if (nv.enabled) await startVcam();
-    else await vcam.stop();
-  } else if (vcam.running && !same(pv, nv)) {
-    await startVcam(); // restarts with the new device/size/fps
-  }
+  // Start, stop or restart (new device/size/fps) as needed.
+  if (!same(prev.output.virtualCam, next.output.virtualCam)) await syncVcam();
   return store.get();
 }
 
@@ -191,14 +216,40 @@ function vcamStatus(): VcamStatus {
   return { ...st, device: st.running ? st.device : r.device, deviceSource: r.source };
 }
 
-/** Start/restart the virtual camera from settings. `enabled` mirrors success, so a failed start
- *  (missing module/ffmpeg) is not retried on every launch; the error stays in vcam.status(). */
-async function startVcam(): Promise<VcamStatus> {
+/** Start/restart the virtual camera from settings (queued). `enabled` mirrors success, so a start
+ *  refused by the pre-checks (missing module/device, no permission, missing ffmpeg) is not retried
+ *  on every launch; the error stays in vcam.status(). A later ffmpeg failure (e.g. the kernel
+ *  refuses a second producer) leaves `enabled` alone and is reported via vcam:status. */
+function startVcam(): Promise<VcamStatus> {
+  return vcamOps.run(startVcamNow);
+}
+
+/** Stop the virtual camera and remember that it is off (queued). */
+function stopVcam(): Promise<VcamStatus> {
+  return vcamOps.run(async () => {
+    if (store.get().output.virtualCam.enabled) store.update({ output: { virtualCam: { enabled: false } } });
+    await vcam.stop();
+    return vcamStatus();
+  });
+}
+
+/** Bring the virtual camera in line with the settings (queued): running with the current
+ *  device/size/fps if enabled, stopped otherwise. */
+function syncVcam(): Promise<VcamStatus> {
+  return vcamOps.run(async () => {
+    if (store.get().output.virtualCam.enabled) return startVcamNow();
+    await vcam.stop();
+    return vcamStatus();
+  });
+}
+
+async function startVcamNow(): Promise<VcamStatus> {
+  if (quitting) return vcamStatus();
   const { width, height, fps } = store.get().output.virtualCam;
   await vcam.start({ device: vcamDevice().device, width, height, fps });
   const st = vcamStatus();
   const enabled = st.running;
-  if (store.get().output.virtualCam.enabled !== enabled) store.update({ output: { virtualCam: { enabled } } });
+  if (!quitting && store.get().output.virtualCam.enabled !== enabled) store.update({ output: { virtualCam: { enabled } } });
   if (st.error) console.error('[vcam]', st.error);
   return st;
 }
@@ -206,10 +257,10 @@ async function startVcam(): Promise<VcamStatus> {
 async function syncServer(s: Settings): Promise<void> {
   const { enabled, port } = s.output.browserSource;
   if (!enabled) return server.stop();
-  if (server.info.running && server.info.port === port) return;
-  const info = await server.start(port);
+  const wasRunning = server.info.running && server.info.port === port;
+  const info = await server.start(port); // no-op if already listening on this port
   if (info.error) console.error('[server]', info.error);
-  else console.log(`[server] OBS browser source: ${info.url}`);
+  else if (!wasRunning) console.log(`[server] OBS browser source: ${info.url}`);
 }
 
 function serverInfo(): ServerInfo {
@@ -302,13 +353,10 @@ function registerIpc(): void {
   handle('server:info', (): ServerInfo => serverInfo());
 
   handle('vcam:start', (): Promise<VcamStatus> => startVcam());
-  handle('vcam:stop', async (): Promise<VcamStatus> => {
-    if (store.get().output.virtualCam.enabled) store.update({ output: { virtualCam: { enabled: false } } });
-    await vcam.stop();
-    return vcamStatus();
-  });
+  handle('vcam:stop', (): Promise<VcamStatus> => stopVcam());
   handle('vcam:status', (): VcamStatus => vcamStatus());
-  handle('vcam:devices', () => listVideoDevices({ excludePids: vcam.pid ? [vcam.pid] : [] }));
+  // /proc scan runs in a worker thread and is cached briefly (see vcamDevice.findHolders).
+  handle('vcam:devices', () => (quitting ? [] : listVideoDevices({ excludePids: vcam.pid ? [vcam.pid] : [] })));
   ipcMain.on('vcam:frame', (e, data: unknown) => {
     if (!trusted(e)) return;
     const buf = toBuffer(data);
@@ -335,21 +383,34 @@ app.on('second-instance', () => {
 
 app.on('window-all-closed', () => app.quit());
 
-let quitting = false;
+/** Marks the app as quitting and stops ffmpeg right away. From here on ffmpeg exits are expected
+ *  (no "ffmpeg unexpectedly terminated" error, no /proc scan) and no restart is started. */
+function beginQuit(): void {
+  quitting = true;
+  vcam.kill();
+}
+
+let shutdownStarted = false;
 app.on('before-quit', (e) => {
   store.flush();
-  if (quitting) return;
-  // Give the server/ffmpeg a moment to shut down cleanly, then quit for real.
-  quitting = true;
+  beginQuit();
+  if (shutdownStarted) return;
+  // Give the server a moment to shut down cleanly, then quit for real.
+  shutdownStarted = true;
   e.preventDefault();
-  vcam.kill();
   const timeout = new Promise((r) => setTimeout(r, 1000));
   void Promise.race([server.stop(), timeout]).finally(() => app.quit());
 });
 
 process.on('exit', () => vcam.kill());
 // Ctrl+C in the terminal / kill: quit through the normal path (flush settings, stop ffmpeg).
-for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => app.quit());
+// ffmpeg runs in its own process group (see VirtualCam), so the terminal's SIGINT reaches only us.
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+  process.on(sig, () => {
+    beginQuit();
+    app.quit();
+  });
+}
 
 void app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
@@ -376,5 +437,5 @@ void app.whenReady().then(async () => {
   // Make the last model available to OBS right away (the renderer loads it again via model:load;
   // same file => no reload for OBS clients).
   if (s.model.lastPath) await readModel(s.model.lastPath, false).catch(() => undefined);
-  if (s.output.virtualCam.enabled) await startVcam();
+  if (s.output.virtualCam.enabled) await syncVcam();
 });

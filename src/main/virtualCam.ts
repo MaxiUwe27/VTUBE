@@ -4,18 +4,27 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { VcamStatus } from '../shared/api';
 import { VCAM_SETUP_HINT } from '../shared/vcamSetup';
+import { childProcessEnv } from './childEnv';
+import { LatestQueue } from './serialQueue';
 import { checkDevice, findHolders, formatHolders, type ProbeOptions } from './vcamDevice';
 
 export interface VcamConfig { device: string; width: number; height: number; fps: number }
 
+/** An ffmpeg exit within this time after a restart counts as "restart failed". */
+const RESTART_FAIL_WINDOW_MS = 10_000;
+
 export class VirtualCam {
   private proc: ChildProcessWithoutNullStreams | null = null;
+  private spawning: ChildProcessWithoutNullStreams | null = null;
   private cfg: VcamConfig | null = null;
   private device = '';
   private error: string | undefined;
   private blocked = false;      // ffmpeg stdin is full -> drop frames until 'drain'
   private stderrTail = '';
   private _droppedFrames = 0;
+  private disposed = false;     // kill() was called (app quits): no restarts, exits are expected
+  /** start()/stop() run strictly one after another; pending superseded requests are skipped. */
+  private readonly queue = new LatestQueue<VcamStatus>();
 
   constructor(
     private readonly ffmpegPath = process.env.VTUBE_FFMPEG || 'ffmpeg',
@@ -41,20 +50,40 @@ export class VirtualCam {
     return s;
   }
 
-  /** Start (or restart with a new config). Idempotent if already running with the same config. */
-  async start(cfg: VcamConfig): Promise<VcamStatus> {
+  /** Start (or restart with a new config). Idempotent if already running with the same config.
+   *  Serialized with stop(): the last request wins. */
+  start(cfg: VcamConfig): Promise<VcamStatus> {
+    return this.queue.run(() => this.doStart({ ...cfg }));
+  }
+
+  stop(): Promise<VcamStatus> {
+    return this.queue.run(() => this.doStop());
+  }
+
+  private async doStart(cfg: VcamConfig): Promise<VcamStatus> {
+    if (this.disposed) return this.status();
     if (this.proc && this.cfg && sameConfig(this.cfg, cfg)) return this.status();
-    await this.stop();
+    const previous = this.proc && this.cfg ? { ...this.cfg } : null;
+    await this.doStop();
+    if (this.disposed) return this.status();
+    const restartNote = previous ? restartFailedNote(previous, cfg) : '';
     this.device = cfg.device;
-    this.error = validateConfig(cfg) ?? checkDevice(cfg.device, this.probe);
-    if (this.error) return this.status();
+    const invalid = validateConfig(cfg) ?? checkDevice(cfg.device, this.probe);
+    if (invalid) {
+      this.error = restartNote + invalid;
+      return this.status();
+    }
 
     const args = [
       '-hide_banner', '-loglevel', 'error',
       '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${cfg.width}x${cfg.height}`, '-r', String(cfg.fps), '-i', '-',
       '-f', 'v4l2', '-pix_fmt', 'yuv420p', cfg.device,
     ];
-    const proc = spawn(this.ffmpegPath, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    // detached: own process group, so Ctrl+C in the terminal reaches only Electron (which then stops
+    // ffmpeg itself) instead of killing ffmpeg first. If Electron dies, ffmpeg reads EOF on stdin
+    // and exits. The environment is cleaned of AppImage library paths (see childEnv.ts).
+    const proc = spawn(this.ffmpegPath, args, { stdio: ['pipe', 'pipe', 'pipe'], detached: true, env: childProcessEnv() });
+    this.spawning = proc;
     try {
       await new Promise<void>((resolve, reject) => {
         proc.once('spawn', resolve);
@@ -62,14 +91,22 @@ export class VirtualCam {
       });
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
-      this.error = err.code === 'ENOENT'
+      this.error = restartNote + (err.code === 'ENOENT'
         ? `ffmpeg wurde nicht gefunden (benötigt für die virtuelle Kamera ${cfg.device}). Installieren mit: sudo dnf install ffmpeg`
-        : `ffmpeg (Ausgabe auf ${cfg.device}) konnte nicht gestartet werden: ${err.message}`;
+        : `ffmpeg (Ausgabe auf ${cfg.device}) konnte nicht gestartet werden: ${err.message}`);
+      return this.status();
+    } finally {
+      this.spawning = null;
+    }
+    if (this.disposed) { // kill() during spawn
+      proc.kill('SIGTERM');
       return this.status();
     }
 
+    const startedAt = Date.now();
     this.proc = proc;
     this.cfg = { ...cfg };
+    this.error = undefined;
     this.blocked = false;
     this.stderrTail = '';
     this._droppedFrames = 0;
@@ -80,25 +117,31 @@ export class VirtualCam {
     proc.stdin.on('drain', () => { this.blocked = false; });
     proc.on('error', (e) => console.error('[vcam] ffmpeg error:', e));
     proc.on('exit', (code, signal) => {
-      if (this.proc !== proc) return; // superseded by stop()/restart
+      if (this.proc !== proc || this.disposed) return; // superseded by stop()/restart, or app quits
       this.proc = null;
       this.cfg = null;
       // Every exit that did not come from stop()/kill() is unexpected (even code 0 or an external SIGTERM).
-      const msg = describeFfmpegFailure(this.stderrTail, cfg, code, signal);
+      const note = restartNote && Date.now() - startedAt < RESTART_FAIL_WINDOW_MS ? restartNote : '';
+      const msg = note + describeFfmpegFailure(this.stderrTail, cfg, code, signal);
       this.error = msg;
       console.error('[vcam]', msg);
       // Name whoever else has the device open (another producer, or a viewer locking the format).
-      try {
-        const others = findHolders([cfg.device], this.probe).get(cfg.device) ?? [];
-        if (others.length && this.error === msg && !this.proc) {
+      void findHolders([cfg.device], { ...this.probe, maxAgeMs: 0 }).then((all) => {
+        const others = all.get(cfg.device) ?? [];
+        if (others.length && this.error === msg && !this.proc && !this.disposed) {
           this.error = `${msg}\nGerät ${cfg.device} ist geöffnet von: ${formatHolders(others)}.`;
         }
-      } catch { /* best effort */ }
+      }).catch(() => { /* best effort */ });
     });
+    // Information only: viewers (OBS source, Discord) keeping the device open are normal.
+    void findHolders([cfg.device], { ...this.probe, excludePids: proc.pid ? [proc.pid] : [] }).then((all) => {
+      const others = all.get(cfg.device) ?? [];
+      if (others.length) console.log(`[vcam] ${cfg.device} ist auch geöffnet von: ${formatHolders(others)}`);
+    }).catch(() => { /* best effort */ });
     return this.status();
   }
 
-  async stop(): Promise<VcamStatus> {
+  private async doStop(): Promise<VcamStatus> {
     const proc = this.proc;
     this.proc = null;
     this.cfg = null;
@@ -114,10 +157,18 @@ export class VirtualCam {
     return this.status();
   }
 
-  /** Synchronous best-effort kill for app quit. */
+  /** Synchronous best-effort kill for app quit. Afterwards the instance ignores ffmpeg exits and
+   *  refuses to start again (queued restarts become no-ops). */
   kill(): void {
-    if (this.proc) this.proc.kill('SIGTERM');
+    this.disposed = true;
+    for (const p of [this.proc, this.spawning]) {
+      if (p && p.exitCode === null && p.signalCode === null) {
+        p.stdin.end();
+        p.kill('SIGTERM');
+      }
+    }
     this.proc = null;
+    this.cfg = null;
   }
 
   /** Feed one RGBA frame. Dropped if size mismatches or ffmpeg can't keep up (never queues unbounded). */
@@ -131,6 +182,12 @@ export class VirtualCam {
     // write() returning false means the chunk is buffered; at most one frame waits until 'drain'.
     if (!proc.stdin.write(frame)) this.blocked = true;
   }
+}
+
+function restartFailedNote(prev: VcamConfig, next: VcamConfig): string {
+  const fmt = (c: VcamConfig) => `${c.device}, ${c.width}×${c.height}, ${c.fps} FPS`;
+  return `Neustart der virtuellen Kamera mit neuen Einstellungen (${fmt(next)}; vorher ${fmt(prev)}) ` +
+    'fehlgeschlagen – die virtuelle Kamera ist aus.\n';
 }
 
 function sameConfig(a: VcamConfig, b: VcamConfig): boolean {

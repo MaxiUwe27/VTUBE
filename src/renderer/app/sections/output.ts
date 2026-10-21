@@ -104,8 +104,10 @@ export function outputSection(ctx: AppContext): SectionModule {
         info.push(`„${d.label || '?'}“ (v4l2loopback) – unter diesem Namen erscheint die Kamera in OBS, Discord usw.`);
         if (d.busyBy.length && v.running) info.push(`Zuschauer: ${holderText(d)}.`);
         else if (d.busyBy.length) {
-          warn.push(`${dev} ist belegt von ${holderText(d)}. Ein Zuschauer (z. B. OBS-Quelle, Discord) ist in Ordnung; ` +
-            'ist es eine andere virtuelle Kamera, braucht VTube Linux ein eigenes Gerät.');
+          // Information only: viewers (OBS source, Discord) commonly keep the device open. If another
+          // program already sends pictures into it, the kernel refuses our ffmpeg and the error says so.
+          info.push(`Geöffnet von: ${holderText(d)}. Zuschauer (z. B. OBS-Quelle, Discord) sind in Ordnung; ` +
+            'sendet dort schon eine andere virtuelle Kamera, schlägt der Start fehl – dann braucht VTube Linux ein eigenes Gerät.');
         }
         if (/\bobs\b/i.test(d.label)) {
           warn.push(`Achtung: ${dev} heißt „${d.label}“ und ist für die virtuelle Kamera von OBS gedacht. ` +
@@ -146,7 +148,9 @@ export function outputSection(ctx: AppContext): SectionModule {
   const vcamBtn = button('Starten', { icon: 'play', variant: 'primary' });
   vcamBtn.addEventListener('click', () => {
     if (live.vcam.busy) return;
-    void (live.vcam.running ? actions.vcamStop() : actions.vcamStart());
+    // Stop: first hand pending setting changes (device/size/fps) to main, so a restart they trigger
+    // is queued before – not after – the stop (main serializes start/stop, last request wins).
+    void (live.vcam.running ? store.flush().then(() => actions.vcamStop()) : actions.vcamStart());
   });
   const vcamState = h('div', { class: 'with-dot vcam-state' });
   const vcamError = h('div', { class: 'alert alert-error hidden' });

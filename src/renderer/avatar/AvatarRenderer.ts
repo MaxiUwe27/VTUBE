@@ -40,9 +40,12 @@ const MAX_DT = 1 / 20;
 const GAZE_FULL_YAW_DEG = 30;
 const GAZE_FULL_PITCH_DEG = 25;
 
-/** If rAF does not fire within this many frame intervals, render by timer until it resumes
- *  (e.g. KWin stops frame callbacks for minimized windows while visibilityState stays 'visible'). */
+/** If rAF does not fire within this many frame intervals (but at least RAF_STALL_MIN_MS), render by
+ *  timer until it resumes (e.g. KWin stops frame callbacks for minimized windows while
+ *  visibilityState stays 'visible'). The floor matters: a merely SLOW rAF is GPU backpressure, and
+ *  rendering past it by timer floods the GPU (seen as WebGL context loss with software GL). */
 const RAF_STALL_FRAMES = 2.5;
+const RAF_STALL_MIN_MS = 250;
 
 interface ManagedBone {
   name: VRMHumanBoneName;
@@ -112,6 +115,7 @@ export class AvatarRenderer {
   private timerId: ReturnType<typeof setTimeout> | 0 = 0;
   private rafStalled = false;
   private rafRequestedAt = 0;
+  private warnedStall = false;
   private lastTickMs = 0;
   private lastRenderMs = 0;
   private fpsFrames = 0;
@@ -364,7 +368,7 @@ export class AvatarRenderer {
     }
     if (this.timerId) clearTimeout(this.timerId);
     this.timerId = setTimeout(this.onTimer,
-      this.rafStalled ? Math.max(4, interval) : Math.max(50, RAF_STALL_FRAMES * interval));
+      this.rafStalled ? Math.max(4, interval) : Math.max(RAF_STALL_MIN_MS, RAF_STALL_FRAMES * interval));
   }
 
   private readonly onRaf = (): void => {
@@ -380,6 +384,10 @@ export class AvatarRenderer {
     // Visible page but no rAF for a while → keep rendering by timer until rAF fires again.
     if (this.rafId) {
       this.rafStalled = true;
+      if (!this.warnedStall) {
+        this.warnedStall = true;
+        console.warn('[AvatarRenderer] requestAnimationFrame stalled – updating by timer until it resumes');
+      }
       // Re-request now and then in case that callback got lost for good.
       if (performance.now() - this.rafRequestedAt > 1000) {
         cancelAnimationFrame(this.rafId);
@@ -406,7 +414,10 @@ export class AvatarRenderer {
       : now;
 
     try {
-      this.renderFrame(dt);
+      // While rAF is stalled nobody sees the canvas (minimized) – skip the on-screen draw but keep the
+      // avatar state and onFrame (solver, OBS poses, virtual camera readback) going. Drawing anyway
+      // would also flood the GPU when the "stall" is really GPU backpressure.
+      this.renderFrame(dt, !this.rafStalled);
     } catch (err) {
       reportOnce('render', err);
     }
@@ -430,7 +441,7 @@ export class AvatarRenderer {
   };
 
   /** Advances the avatar by dt (s) and renders one frame to the canvas. */
-  private renderFrame(dtRaw: number): void {
+  private renderFrame(dtRaw: number, draw = true): void {
     if (this.contextLost) return;
     const dt = Math.min(Math.max(dtRaw, 0), MAX_DT);
     this.elapsed += dt;
@@ -461,7 +472,7 @@ export class AvatarRenderer {
       }
       m.vrm.update(dt);
     }
-    this.renderer.render(this.scene, this.camera);
+    if (draw) this.renderer.render(this.scene, this.camera);
   }
 
   // ---------------------------------------------------------------- pose
