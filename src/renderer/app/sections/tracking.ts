@@ -3,7 +3,7 @@
 
 import { FaceTracker } from '../../tracking/FaceTracker';
 import type { AppContext, SectionModule } from '../context';
-import { button, hint, iconButton, infoGrid, section, statusDot, subhead, type Opt } from '../controls';
+import { button, hint, iconButton, more, section, statusDot, statusTiles, subhead, type Opt } from '../controls';
 import { h, setText, toggleClass } from '../dom';
 import { toast } from '../toast';
 import type { SettingsPatch } from '../store';
@@ -184,7 +184,7 @@ export function trackingSection(ctx: AppContext): SectionModule {
   };
 
   // --- Status ---------------------------------------------------------------------------------
-  const status = infoGrid([
+  const status = statusTiles([
     { key: 'state', label: 'Status' },
     { key: 'face', label: 'Gesicht' },
     { key: 'fps', label: 'Tracking-FPS' },
@@ -207,8 +207,8 @@ export function trackingSection(ctx: AppContext): SectionModule {
   previewInner.append(video, overlay);
 
   // --- Calibration ----------------------------------------------------------------------------
-  const calibBtn = button('Kalibrieren (neutrales Gesicht)', {
-    icon: 'target', variant: 'primary', title: 'Neutrale Kopfhaltung und Mimik übernehmen (Taste C)',
+  const calibBtn = button('Kalibrieren', {
+    icon: 'target', variant: 'primary', block: true, title: 'Neutrale Kopfhaltung und Mimik übernehmen (Taste C)',
     onClick: () => actions.calibrate(),
   });
   const resetBtn = button('Zurücksetzen', {
@@ -220,7 +220,7 @@ export function trackingSection(ctx: AppContext): SectionModule {
   ctx.on('calibration', () => {
     const n = live.calibrationCountdown;
     calibBtn.disabled = n !== null;
-    setText(calibBtn.querySelector('span')!, n !== null ? `Bitte stillhalten… ${n}` : 'Kalibrieren (neutrales Gesicht)');
+    setText(calibBtn.querySelector('span')!, n !== null ? `Bitte stillhalten… ${n}` : 'Kalibrieren');
   });
   ui.bind(() => {
     const cal = store.value.tracking.calibration;
@@ -230,54 +230,57 @@ export function trackingSection(ctx: AppContext): SectionModule {
 
   const sec = section('tracking', 'Kamera & Tracking', 'camera', true,
     ui.toggle({
-      label: 'Gesichts-Tracking',
-      hint: 'Webcam-Tracking ein- oder ausschalten',
+      label: 'Tracking',
+      hint: 'Gesichts-Tracking über die Webcam ein- oder ausschalten',
       get: (s) => s.tracking.enabled,
       set: (v) => ({ tracking: { enabled: v } }),
     }),
     camSelect.el,
     urlBox,
-    ui.segmented<string>({
-      label: 'Auflösung',
-      hint: 'Höhere Auflösung = genauer, aber mehr Rechenlast (bei der Browserquelle: Größe der Seite)',
-      options: [{ value: '640x480', label: '640×480' }, { value: '1280x720', label: '1280×720' }],
-      get: (s) => `${s.camera.width}x${s.camera.height}`,
-      set: (v) => {
-        const [w, hh] = v.split('x').map(Number);
-        return { camera: { width: w, height: hh } };
-      },
-    }),
-    ui.segmented<number>({
-      label: 'Kamera-FPS',
-      options: [{ value: 30, label: '30' }, { value: 60, label: '60' }],
-      get: (s) => s.camera.fps,
-      set: (v) => ({ camera: { fps: v } }),
-    }),
-    ui.toggle({
-      label: 'GPU-Beschleunigung',
-      hint: 'MediaPipe auf der Grafikkarte ausführen (fällt bei Problemen automatisch auf CPU zurück)',
-      get: (s) => s.tracking.useGpu,
-      set: (v) => ({ tracking: { useGpu: v } }),
-    }),
     status.el,
     errorBox,
-    subhead('Vorschau'),
     ui.toggle({
-      label: 'Kamerabild anzeigen',
+      label: 'Kamerabild',
+      hint: 'Vorschau des Kamerabilds in der Seitenleiste',
       get: (s) => s.camera.showPreview,
       set: (v) => ({ camera: { showPreview: v } }),
     }),
-    ui.toggle({
-      label: 'Gesichtspunkte einblenden',
-      get: (s) => s.camera.showLandmarks,
-      set: (v) => ({ camera: { showLandmarks: v } }),
-      enabled: (s) => s.camera.showPreview,
-    }),
     preview,
     subhead('Kalibrierung'),
-    hint('Gerade in die Kamera schauen, entspanntes neutrales Gesicht, Mund geschlossen. Nach 3 Sekunden wird die Haltung übernommen.'),
+    hint('Gerade in die Kamera schauen, neutrales Gesicht, Mund zu. Nach 3 Sekunden wird die Haltung übernommen.'),
     h('div', { class: 'btn-row' }, calibBtn),
     calibState,
+    more('tracking',
+      ui.segmented<string>({
+        label: 'Auflösung',
+        hint: 'Höhere Auflösung = genauer, aber mehr Rechenlast (bei der Browserquelle: Größe der Seite)',
+        options: [{ value: '640x480', label: '640×480' }, { value: '1280x720', label: '1280×720' }],
+        get: (s) => `${s.camera.width}x${s.camera.height}`,
+        set: (v) => {
+          const [w, hh] = v.split('x').map(Number);
+          return { camera: { width: w, height: hh } };
+        },
+      }),
+      ui.segmented<number>({
+        label: 'Kamera-FPS',
+        options: [{ value: 30, label: '30' }, { value: 60, label: '60' }],
+        get: (s) => s.camera.fps,
+        set: (v) => ({ camera: { fps: v } }),
+      }),
+      ui.toggle({
+        label: 'GPU nutzen',
+        hint: 'MediaPipe auf der Grafikkarte ausführen (fällt bei Problemen automatisch auf CPU zurück)',
+        get: (s) => s.tracking.useGpu,
+        set: (v) => ({ tracking: { useGpu: v } }),
+      }),
+      ui.toggle({
+        label: 'Gesichtspunkte',
+        hint: 'Erkannte Gesichtspunkte im Kamerabild einblenden',
+        get: (s) => s.camera.showLandmarks,
+        set: (v) => ({ camera: { showLandmarks: v } }),
+        enabled: (s) => s.camera.showPreview,
+      }),
+    ),
   );
 
   ui.bind(() => {
@@ -289,7 +292,7 @@ export function trackingSection(ctx: AppContext): SectionModule {
     const s = store.value;
     const label = { off: 'Aus', starting: 'Startet…', running: 'Läuft', error: 'Fehler' }[t.state];
     const dot = { off: 'off', starting: 'warn', running: 'ok', error: 'error' }[t.state] as 'ok';
-    status.set('state', h('span', { class: 'with-dot' }, statusDot(dot), label));
+    status.set('state', label, dot);
     errorText.textContent = t.error ?? '';
     toggleClass(errorBox, 'hidden', !(t.state === 'error' && t.error));
     camSelect.refresh();
@@ -331,7 +334,7 @@ export function trackingSection(ctx: AppContext): SectionModule {
     const lm = tracker.lastLandmarks;
     const fresh = live.lastFace?.detected && performance.now() - live.lastFaceAt < 500;
     if (s.camera.showLandmarks && lm && fresh) {
-      ctx2d.fillStyle = 'rgba(167, 139, 250, 0.9)';
+      ctx2d.fillStyle = 'rgba(20, 235, 220, 0.95)'; // Türkis
       const r = Math.max(1, vw / 400);
       for (const p of lm) ctx2d.fillRect(p.x * vw - r / 2, p.y * vh - r / 2, r, r);
     }
@@ -345,11 +348,11 @@ export function trackingSection(ctx: AppContext): SectionModule {
       const t = live.tracker;
       const face = live.lastFace;
       const stale = now - live.lastFaceAt > 1000;
-      if (t.state !== 'running') status.set('face', '–', 'muted');
+      if (t.state !== 'running') status.set('face', '–');
       else if (stale) status.set('face', store.value.camera.source === 'url' ? 'Keine Bilder von der Browserquelle' : 'Keine Kamerabilder', 'warn');
-      else if (face?.detected) status.set('face', h('span', { class: 'with-dot' }, statusDot('ok'), 'Erkannt'), 'good');
-      else status.set('face', h('span', { class: 'with-dot' }, statusDot('warn'), 'Nicht erkannt'), 'warn');
-      status.set('fps', t.state === 'running' ? `${Math.round(tracker.fps)} fps` : '–');
+      else if (face?.detected) status.set('face', 'Erkannt', 'ok');
+      else status.set('face', 'Nicht erkannt', 'warn');
+      status.set('fps', t.state === 'running' ? `${Math.round(tracker.fps)} FPS` : '–');
       renderUrlState(now);
       if (tracker.delegate !== lastDelegate) {
         lastDelegate = tracker.delegate;

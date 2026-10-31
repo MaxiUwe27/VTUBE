@@ -9,16 +9,16 @@ export function modelSection(ctx: AppContext): SectionModule {
   const { store, live, actions } = ctx;
 
   const openBtn = button('VRM öffnen…', {
-    icon: 'folder', variant: 'primary', title: 'VRM-Datei auswählen (Strg+O)',
+    icon: 'folder', variant: 'primary', block: true, title: 'VRM-Datei auswählen (Strg+O)',
     onClick: () => void actions.openModelDialog(),
   });
 
   const info = infoGrid([
     { key: 'name', label: 'Name' },
-    { key: 'version', label: 'VRM-Version' },
+    { key: 'version', label: 'Format' },
     { key: 'ps', label: 'Perfect Sync' },
-    { key: 'expr', label: 'Expressions' },
-    { key: 'lookat', label: 'Blicksteuerung' },
+    { key: 'expr', label: 'Ausdrücke' },
+    { key: 'lookat', label: 'Blick' },
     { key: 'file', label: 'Datei' },
   ]);
   const empty = h('div', { class: 'card-empty' }, 'Kein Modell geladen.');
@@ -90,11 +90,11 @@ export function modelSection(ctx: AppContext): SectionModule {
 
   const sec = section('model', 'Modell', 'user', true,
     h('div', { class: 'btn-row' }, openBtn),
-    hint('Oder eine ', h('b', null, '.vrm'), '-Datei einfach ins Fenster ziehen.'),
+    hint('Oder eine ', h('b', null, '.vrm'), '-Datei ins Fenster ziehen.'),
     infoCard,
-    diag.el,
     subhead('Zuletzt verwendet'),
     recentList,
+    diag.el,
   );
   ctx.on('model', () => {
     sec.badge.textContent = live.model ? `VRM ${live.model.info.version === '1' ? '1.0' : '0.x'}` : '';

@@ -1,7 +1,7 @@
 // 7. Ausgabe: OBS browser source (local server) and virtual camera (v4l2loopback).
 
 import type { AppContext, SectionModule } from '../context';
-import { button, codeBox, hint, iconButton, infoGrid, section, statusDot, subhead } from '../controls';
+import { button, codeBox, hint, iconButton, more, section, statusDot, statusTiles, subhead } from '../controls';
 import { h, setText, toggleClass } from '../dom';
 import { toast } from '../toast';
 import type { VideoDeviceInfo } from '../../../shared/api';
@@ -11,11 +11,12 @@ export function outputSection(ctx: AppContext): SectionModule {
   const { ui, live, actions, store } = ctx;
 
   // --- OBS browser source ---------------------------------------------------------------------
-  const serverInfo = infoGrid([
+  const serverInfo = statusTiles([
     { key: 'state', label: 'Server' },
-    { key: 'clients', label: 'OBS/Browser verbunden' },
+    { key: 'clients', label: 'Verbunden (OBS/Browser)' },
   ]);
-  const url = codeBox('–', 'URL kopieren');
+  const urlText = h('code', { class: 'url-line' }, '–');
+  const url = { el: h('div', { class: 'codebox', title: 'Adresse für die OBS-Browser-Quelle' }, urlText), setText: (t: string) => setText(urlText, t) };
   const copyBtn = button('URL kopieren', {
     icon: 'copy', variant: 'primary', small: true,
     onClick: () => {
@@ -26,7 +27,7 @@ export function outputSection(ctx: AppContext): SectionModule {
     },
   });
   const openBtn = button('Im Browser testen', {
-    icon: 'external', variant: 'ghost', small: true,
+    icon: 'external', small: true,
     onClick: () => {
       const u = live.server?.url;
       if (u) void window.vtube.openExternal(u).catch(() => toast('Browser konnte nicht geöffnet werden.', 'error'));
@@ -37,10 +38,10 @@ export function outputSection(ctx: AppContext): SectionModule {
   const renderServer = () => {
     const s = live.server;
     const enabled = store.value.output.browserSource.enabled;
-    if (!enabled) serverInfo.set('state', h('span', { class: 'with-dot' }, statusDot('off'), 'Deaktiviert'));
-    else if (!s) serverInfo.set('state', h('span', { class: 'with-dot' }, statusDot('warn'), 'Unbekannt'));
-    else if (s.running) serverInfo.set('state', h('span', { class: 'with-dot' }, statusDot('ok'), `Läuft auf Port ${s.port}`));
-    else serverInfo.set('state', h('span', { class: 'with-dot' }, statusDot('error'), 'Gestoppt'));
+    if (!enabled) serverInfo.set('state', 'Aus', 'off');
+    else if (!s) serverInfo.set('state', 'Unbekannt', 'warn');
+    else if (s.running) serverInfo.set('state', `Läuft · Port ${s.port}`, 'ok');
+    else serverInfo.set('state', 'Gestoppt', 'error');
     serverInfo.set('clients', enabled && s?.running && typeof s.clients === 'number' ? String(s.clients) : '–');
     url.setText(s?.url && s.running ? s.url : '–');
     copyBtn.disabled = openBtn.disabled = !(s?.running && s.url);
@@ -194,62 +195,68 @@ export function outputSection(ctx: AppContext): SectionModule {
     setText(vcamError, v.error ?? '');
     toggleClass(vcamError, 'hidden', !v.error);
     if (v.error && !setup.open) setup.open = true;
-    sec.badge.textContent = [store.value.output.browserSource.enabled && live.server?.running ? 'OBS' : '', v.running ? 'VCam' : ''].filter(Boolean).join(' · ');
+    sec.badge.textContent = [store.value.output.browserSource.enabled && live.server?.running ? 'OBS' : '', v.running ? 'VCam' : ''].filter(Boolean).join(' + ');
     sec.badge.className = 'section-badge ok';
   };
 
   const sec = section('output', 'Ausgabe', 'broadcast', false,
     subhead('OBS Browser-Quelle'),
     ui.toggle({
-      label: 'Browser-Quelle aktiv',
+      label: 'Browser-Quelle',
       hint: 'Lokalen Server für OBS starten (Avatar mit transparentem Hintergrund)',
       get: (s) => s.output.browserSource.enabled,
       set: (v) => ({ output: { browserSource: { enabled: v } } }),
-    }),
-    ui.number({
-      label: 'Port',
-      min: 1024, max: 65535,
-      get: (s) => s.output.browserSource.port,
-      set: (v) => ({ output: { browserSource: { port: v } } }),
-      enabled: (s) => s.output.browserSource.enabled,
     }),
     serverInfo.el,
     url.el,
     h('div', { class: 'btn-row' }, copyBtn, openBtn),
     serverError,
-    h('ol', { class: 'steps' },
-      h('li', null, 'In OBS: ', h('b', null, 'Quellen → + → Browser'), '.'),
-      h('li', null, 'URL einfügen, ', h('b', null, 'Breite 1920'), ', ', h('b', null, 'Höhe 1080'), '.'),
-      h('li', null, 'Der Hintergrund der Browserquelle ist standardmäßig transparent (das Grün gilt nur für dieses Fenster). Farbe erzwingen: ', h('code', null, '?bg=00ff00'), ', App-Hintergrund übernehmen: ', h('code', null, '?bg=app'), '.'),
-      h('li', null, 'Probleme zeigt die Seite oben links an; Diagnose: URL mit ', h('code', null, '?debug'), '.')),
+    h('details', { class: 'plain' },
+      h('summary', null, 'So geht’s in OBS'),
+      h('ol', { class: 'steps' },
+        h('li', null, 'In OBS: ', h('b', null, 'Quellen → + → Browser'), '.'),
+        h('li', null, 'URL einfügen, ', h('b', null, 'Breite 1920'), ', ', h('b', null, 'Höhe 1080'), '.'),
+        h('li', null, 'Der Hintergrund der Browserquelle ist standardmäßig transparent (das Grün gilt nur für dieses Fenster). Farbe erzwingen: ', h('code', null, '?bg=00ff00'), ', App-Hintergrund übernehmen: ', h('code', null, '?bg=app'), '.'),
+        h('li', null, 'Probleme zeigt die Seite oben links an; Diagnose: URL mit ', h('code', null, '?debug'), '.'))),
+    more('output-obs',
+      ui.number({
+        label: 'Port',
+        min: 1024, max: 65535,
+        get: (s) => s.output.browserSource.port,
+        set: (v) => ({ output: { browserSource: { port: v } } }),
+        enabled: (s) => s.output.browserSource.enabled,
+      }),
+    ),
     subhead('Virtuelle Kamera'),
-    devInput.el,
-    devInfo,
-    devWarn,
-    ui.segmented<string>({
-      label: 'Auflösung',
-      stacked: true,
-      options: [
-        { value: '640x360', label: '640×360' },
-        { value: '1280x720', label: '1280×720' },
-        { value: '1920x1080', label: '1920×1080' },
-      ],
-      get: (s) => `${s.output.virtualCam.width}x${s.output.virtualCam.height}`,
-      set: (v) => {
-        const [w, hh] = v.split('x').map(Number);
-        return { output: { virtualCam: { width: w, height: hh } } };
-      },
-    }),
-    ui.segmented<number>({
-      label: 'FPS',
-      options: [{ value: 30, label: '30' }, { value: 60, label: '60' }],
-      get: (s) => s.output.virtualCam.fps,
-      set: (v) => ({ output: { virtualCam: { fps: v } } }),
-    }),
     h('div', { class: 'btn-row vcam-row' }, vcamBtn, vcamState),
     vcamError,
+    devWarn,
     setup,
-    hint('Änderungen an Gerät, Auflösung oder FPS starten eine laufende virtuelle Kamera automatisch neu.'),
+    more('output-vcam',
+      devInput.el,
+      devInfo,
+      ui.segmented<string>({
+        label: 'Auflösung',
+        stacked: true,
+        options: [
+          { value: '640x360', label: '640×360' },
+          { value: '1280x720', label: '1280×720' },
+          { value: '1920x1080', label: '1920×1080' },
+        ],
+        get: (s) => `${s.output.virtualCam.width}x${s.output.virtualCam.height}`,
+        set: (v) => {
+          const [w, hh] = v.split('x').map(Number);
+          return { output: { virtualCam: { width: w, height: hh } } };
+        },
+      }),
+      ui.segmented<number>({
+        label: 'FPS',
+        options: [{ value: 30, label: '30' }, { value: 60, label: '60' }],
+        get: (s) => s.output.virtualCam.fps,
+        set: (v) => ({ output: { virtualCam: { fps: v } } }),
+      }),
+      hint('Änderungen an Gerät, Auflösung oder FPS starten eine laufende virtuelle Kamera automatisch neu.'),
+    ),
   );
 
   ctx.on('vcam', renderVcam);

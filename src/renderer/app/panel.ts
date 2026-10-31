@@ -11,6 +11,13 @@ import { viewSection } from './sections/view';
 import { outputSection } from './sections/output';
 import { aboutSection } from './sections/about';
 
+/** Pixel "V" (8×6 cells) for the header logo tile. */
+function logo(): HTMLElement {
+  const el = h('span', { class: 'logo', 'aria-hidden': 'true' });
+  el.innerHTML = '<svg viewBox="0 0 8 6"><path fill="#006eff" d="M0 0h2v2H0zM6 0h2v2H6zM1 2h2v2H1zM5 2h2v2H5zM2 4h4v1H2zM3 5h2v1H3z"/></svg>';
+  return el;
+}
+
 function chip(label: string, title: string): { el: HTMLElement; set(state: 'ok' | 'warn' | 'error' | 'off'): void } {
   const dot = h('span', { class: 'dot dot-off' });
   const el = h('span', { class: 'chip', title }, dot, label);
@@ -36,17 +43,17 @@ export function buildPanel(ctx: AppContext, panel: HTMLElement): { tick(now: num
     vcam: chip('VCam', 'Virtuelle Kamera'),
   };
 
-  const closeBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm btn-icon', title: 'Seitenleiste ausblenden (Tab)', 'aria-label': 'Seitenleiste ausblenden' }, icon('panelClose'));
+  const closeBtn = h('button', { type: 'button', class: 'head-btn', title: 'Seitenleiste ausblenden (Tab)', 'aria-label': 'Seitenleiste ausblenden' }, icon('panelClose'));
   closeBtn.addEventListener('click', () => actions.togglePanel(false));
 
   const header = h('header', { class: 'panel-head' },
     h('div', { class: 'brand-row' },
-      h('div', { class: 'brand' }, h('span', { class: 'logo' }, 'V'), h('span', null, 'VTube ', h('b', null, 'Linux'))),
+      h('div', { class: 'brand' }, logo(), h('span', { class: 'brand-title' }, 'VTube ', h('span', { class: 'brand-sub' }, 'Linux'))),
       closeBtn),
+    h('div', { class: 'chips-row' }, Object.values(chips).map((c) => c.el)),
     h('div', { class: 'stats-row' },
-      h('span', { class: 'stat', title: 'Gemessene Render-Bildrate' }, h('span', { class: 'stat-unit' }, 'Render'), renderFps, h('span', { class: 'stat-unit' }, 'FPS')),
-      h('span', { class: 'stat', title: 'Verarbeitete Kamerabilder pro Sekunde' }, h('span', { class: 'stat-unit' }, 'Tracking'), trackFps, h('span', { class: 'stat-unit' }, 'FPS'))),
-    h('div', { class: 'chips-row' }, Object.values(chips).map((c) => c.el)));
+      h('span', { class: 'stat', title: 'Gemessene Render-Bildrate' }, 'Render', renderFps, 'FPS'),
+      h('span', { class: 'stat', title: 'Verarbeitete Kamerabilder pro Sekunde' }, 'Tracking', trackFps, 'FPS')));
 
   const sections: SectionModule[] = [
     modelSection(ctx),

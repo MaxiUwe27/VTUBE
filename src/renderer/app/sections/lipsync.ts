@@ -2,7 +2,7 @@
 
 import { LipSync } from '../../audio/LipSync';
 import type { AppContext, SectionModule } from '../context';
-import { fmt, hint, iconButton, meter, section, type Opt } from '../controls';
+import { fmt, iconButton, meter, more, section, type Opt } from '../controls';
 import { h, toggleClass } from '../dom';
 import { toast } from '../toast';
 
@@ -47,22 +47,24 @@ export function lipSyncSection(ctx: AppContext): SectionModule {
   });
   navigator.mediaDevices?.addEventListener?.('devicechange', () => void loadMics());
 
-  const volume = meter('Pegel', { marker: true });
+  const volume = meter('Pegel', { marker: true, stacked: true });
   volume.el.classList.add('meter-lg');
-  const visemeMeters = VISEMES.map((v) => meter(VISEME_LABEL[v]));
+  const visemeMeters = VISEMES.map((v) => meter(VISEME_LABEL[v], { stacked: true }));
   const levelCard = h('div', { class: 'card meter-card' },
     volume.el,
     h('div', { class: 'viseme-grid' }, visemeMeters.map((m) => m.el)));
   const errorBox = h('div', { class: 'alert alert-error hidden' });
 
-  const sec = section('lipsync', 'Lip-Sync (Mikrofon)', 'mic', false,
+  const sec = section('lipsync', 'Lip-Sync', 'mic', false,
     ui.toggle({
-      label: 'Lip-Sync aktiv',
+      label: 'Lip-Sync',
       hint: 'Mundbewegung zusätzlich aus dem Mikrofon berechnen',
       get: (s) => s.lipSync.enabled,
       set: (v) => ({ lipSync: { enabled: v } }),
     }),
     micSelect.el,
+    errorBox,
+    levelCard,
     ui.slider({
       label: 'Verstärkung',
       hint: 'Eingangsverstärkung des Mikrofons',
@@ -72,23 +74,23 @@ export function lipSyncSection(ctx: AppContext): SectionModule {
     }),
     ui.slider({
       label: 'Rauschsperre',
-      hint: 'Leise Geräusche unterhalb dieser Schwelle werden ignoriert (Markierung im Pegel)',
+      hint: 'Leise Geräusche unterhalb dieser Schwelle werden ignoriert (Strich im Pegel). ' +
+        'Tipp: knapp über das Grundrauschen stellen, sodass der Pegel in Sprechpausen bei 0 bleibt.',
       min: 0, max: 0.5, step: 0.01, format: fmt.pct,
       get: (s) => s.lipSync.noiseGate,
       set: (v) => ({ lipSync: { noiseGate: v } }),
     }),
-    h('div', { class: 'mix-wrap' },
-      ui.slider({
-        label: 'Mischung',
-        hint: 'Links: Mund nur aus der Kamera · Rechts: Mund nur aus dem Mikrofon',
-        min: 0, max: 1, step: 0.01, format: fmt.pct,
-        get: (s) => s.lipSync.mix,
-        set: (v) => ({ lipSync: { mix: v } }),
-      }),
-      h('div', { class: 'mix-scale' }, h('span', null, 'Kamera'), h('span', null, 'Audio'))),
-    errorBox,
-    levelCard,
-    hint('Tipp: Rauschsperre knapp über das Grundrauschen stellen, sodass der Pegel in Sprechpausen bei 0 bleibt.'),
+    more('lipsync',
+      h('div', { class: 'mix-wrap' },
+        ui.slider({
+          label: 'Mischung',
+          hint: 'Links: Mund nur aus der Kamera · Rechts: Mund nur aus dem Mikrofon',
+          min: 0, max: 1, step: 0.01, format: fmt.pct,
+          get: (s) => s.lipSync.mix,
+          set: (v) => ({ lipSync: { mix: v } }),
+        }),
+        h('div', { class: 'mix-scale' }, h('span', null, 'Kamera'), h('span', null, 'Audio'))),
+    ),
   );
 
   function renderState(): void {

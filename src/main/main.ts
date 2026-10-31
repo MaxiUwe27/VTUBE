@@ -137,7 +137,7 @@ function createWindow(): void {
     height: 900,
     minWidth: 960,
     minHeight: 600,
-    backgroundColor: '#15151c',
+    backgroundColor: '#eef4f9',
     title: 'VTube Linux',
     ...(appIcon ? { icon: appIcon } : {}),
     show: false,

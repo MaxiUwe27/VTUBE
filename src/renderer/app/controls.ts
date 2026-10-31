@@ -347,7 +347,8 @@ export function section(id: string, title: string, iconName: string, defaultOpen
   let open = stored ?? defaultOpen;
   const badge = h('span', { class: 'section-badge' });
   const header = h('button', { type: 'button', class: 'section-head', 'aria-expanded': String(open) },
-    icon(iconName, 'section-icon'), h('span', { class: 'section-title' }, title), badge, icon('chevron', 'chev'));
+    h('span', { class: 'section-icon-tile' }, icon(iconName, 'section-icon')),
+    h('span', { class: 'section-title' }, title), badge, icon('chevron', 'chev'));
   const body = h('div', { class: 'section-body' }, ...children);
   const el = h('section', { class: 'section', id: `sec-${id}` }, header, body);
   const apply = () => {
@@ -368,6 +369,43 @@ export function section(id: string, title: string, iconName: string, defaultOpen
   return handle;
 }
 
+const MORE_KEY = 'vtube.more.open';
+
+/**
+ * "Mehr Einstellungen": collapsible block for rarely used controls at the end of a section (or of a
+ * sub-group). The open state is remembered per id (localStorage, like the sections).
+ */
+export function more(id: string, ...children: Children): HTMLElement {
+  let map: Record<string, boolean> = {};
+  try {
+    map = JSON.parse(localStorage.getItem(MORE_KEY) ?? '{}') ?? {};
+  } catch {
+    map = {};
+  }
+  let open = map[id] ?? false;
+  const head = h('button', { type: 'button', class: 'more-head', 'aria-expanded': String(open) },
+    h('span', null, 'Mehr Einstellungen'), icon('chevron', 'chev'));
+  const body = h('div', { class: 'more-body' }, ...children);
+  const el = h('div', { class: 'more', id: `more-${id}` }, head, body);
+  const apply = () => {
+    toggleClass(el, 'open', open);
+    head.setAttribute('aria-expanded', String(open));
+  };
+  head.addEventListener('click', () => {
+    open = !open;
+    apply();
+    try {
+      const m = JSON.parse(localStorage.getItem(MORE_KEY) ?? '{}') ?? {};
+      m[id] = open;
+      localStorage.setItem(MORE_KEY, JSON.stringify(m));
+    } catch {
+      /* per-viewer convenience only */
+    }
+  });
+  apply();
+  return el;
+}
+
 export function subhead(text: string, extra?: HTMLElement): HTMLElement {
   return h('div', { class: 'subhead' }, h('span', null, text), extra ?? null);
 }
@@ -381,13 +419,15 @@ export interface ButtonOpts {
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   title?: string;
   small?: boolean;
+  /** Full width of the row. */
+  block?: boolean;
   onClick?(e: MouseEvent): void;
 }
 
 export function button(label: string, o: ButtonOpts = {}): HTMLButtonElement {
   const b = h('button', {
     type: 'button',
-    class: `btn btn-${o.variant ?? 'secondary'}${o.small ? ' btn-sm' : ''}${label ? '' : ' btn-icon'}`,
+    class: `btn btn-${o.variant ?? 'secondary'}${o.small ? ' btn-sm' : ''}${o.block ? ' btn-block' : ''}${label ? '' : ' btn-icon'}`,
     title: o.title,
     'aria-label': label ? undefined : o.title,
   }, o.icon ? icon(o.icon) : null, label ? h('span', null, label) : null);
@@ -438,13 +478,19 @@ export function infoGrid(rows: { key: string; label: string }[]): { el: HTMLElem
   };
 }
 
-/** Horizontal level bar with label and value. */
-export function meter(label: string, opts: { marker?: boolean } = {}): { el: HTMLElement; set(v: number, text?: string): void; setLabel(t: string): void; setMarker(v: number): void } {
+/**
+ * Horizontal level bar with label and value. Fixed size: only the bar's width (scaleX) and the
+ * (tabular) number change while it updates. `stacked` puts label + value above a full-width bar.
+ */
+export function meter(label: string, opts: { marker?: boolean; stacked?: boolean } = {}): { el: HTMLElement; set(v: number, text?: string): void; setLabel(t: string): void; setMarker(v: number): void } {
   const fill = h('div', { class: 'meter-fill' });
   const marker = opts.marker ? h('div', { class: 'meter-marker' }) : null;
   const lab = h('span', { class: 'meter-label' }, label);
   const val = h('span', { class: 'meter-value' });
-  const el = h('div', { class: 'meter' }, lab, h('div', { class: 'meter-track' }, fill, marker), val);
+  const track = h('div', { class: 'meter-track' }, fill, marker);
+  const el = opts.stacked
+    ? h('div', { class: 'meter stacked' }, lab, val, track)
+    : h('div', { class: 'meter' }, lab, track, val);
   let last = -1;
   return {
     el,
@@ -466,6 +512,36 @@ export function meter(label: string, opts: { marker?: boolean } = {}): { el: HTM
   };
 }
 
-export function statusDot(state: 'ok' | 'warn' | 'error' | 'off'): HTMLElement {
+export type DotState = 'ok' | 'warn' | 'error' | 'off';
+
+export function statusDot(state: DotState): HTMLElement {
   return h('span', { class: `dot dot-${state}` });
+}
+
+/**
+ * Live status tiles (2 per row): small label above a one-line value with an optional square status
+ * dot. Updated in place – fixed height, long texts are cut with "…" (full text in the tooltip).
+ */
+export function statusTiles(rows: { key: string; label: string }[]): { el: HTMLElement; set(key: string, text: string, state?: DotState | null): void } {
+  const cells = new Map<string, { value: HTMLElement; dot: HTMLElement; text: HTMLElement }>();
+  const el = h('div', { class: 'tiles' });
+  for (const r of rows) {
+    const dot = h('span', { class: 'dot dot-off' });
+    const text = h('span', { class: 'tile-text' }, '–');
+    const value = h('div', { class: 'tile-value' }, dot, text);
+    cells.set(r.key, { value, dot, text });
+    el.appendChild(h('div', { class: 'tile' }, h('span', { class: 'tile-label' }, r.label), value));
+  }
+  return {
+    el,
+    set(key, value, state = null) {
+      const c = cells.get(key);
+      if (!c) return;
+      setText(c.text, value);
+      if (c.text.title !== value) c.text.title = value;
+      toggleClass(c.value, 'has-dot', !!state);
+      const cls = `dot dot-${state ?? 'off'}`;
+      if (c.dot.className !== cls) c.dot.className = cls;
+    },
+  };
 }

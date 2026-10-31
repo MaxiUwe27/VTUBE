@@ -1,7 +1,7 @@
 // "Kugel": a small trackball for the camera orbit in the Ansicht section.
 //
 // The ball stands for the avatar and is drawn exactly as the camera currently sees it: the
-// accent dot is the avatar's front (face), the small dot its top. Dragging the ball turns it like
+// white square is the avatar's front (face), the small navy square its top. Dragging the ball turns it like
 // grabbing the scene in the avatar window (drag right → the avatar turns right = camera moves to
 // the viewer's left). Arrow keys step 5° (Shift: 15°), Home / double-click → frontal.
 
@@ -11,6 +11,8 @@ import { h, setText } from './dom';
 import { currentOrbit, orbitPatch, pitchText, ViewUpdater, yawText } from './orbit';
 
 const SIZE = 116; // CSS px
+const RADIUS = SIZE / 2 - 6; // room for the outline and the hard shadow below
+const NAVY = '#061838';
 
 type V3 = [number, number, number];
 
@@ -37,7 +39,7 @@ export function orbitBall(store: SettingsStore, ui: Controls): HTMLElement {
     tabindex: 0,
     role: 'img',
     'aria-label': 'Kamera-Orbit: ziehen zum Drehen, Pfeiltasten in 5°-Schritten, Pos1 = frontal',
-    title: 'Kugel = Avatar (Punkt = Gesicht). Ziehen dreht die Ansicht wie im Avatar-Fenster.\nPfeiltasten: 5° (Umschalt: 15°) · Doppelklick / Pos1: frontal',
+    title: 'Kugel = Avatar (weißes Quadrat = Gesicht). Ziehen dreht die Ansicht wie im Avatar-Fenster.\nPfeiltasten: 5° (Umschalt: 15°) · Doppelklick / Pos1: frontal',
   });
   canvas.style.width = canvas.style.height = `${SIZE}px`;
   const readout = h('div', { class: 'orbit-readout' });
@@ -58,8 +60,8 @@ export function orbitBall(store: SettingsStore, ui: Controls): HTMLElement {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, SIZE, SIZE);
     const cx = SIZE / 2;
-    const cy = SIZE / 2;
-    const R = SIZE / 2 - 5;
+    const cy = SIZE / 2 - 1.5;
+    const R = RADIUS;
 
     // Camera basis (same as framing.ts): c = towards camera, right = up × c, up' = c × right.
     const c = orbitDir(o.yaw, o.pitch);
@@ -67,11 +69,17 @@ export function orbitBall(store: SettingsStore, ui: Controls): HTMLElement {
     const u = norm(cross(c, r));
     const proj = (w: V3) => ({ x: cx + dot(w, r) * R, y: cy - dot(w, u) * R, z: dot(w, c) });
 
-    // Shaded ball, lit from the upper left like the avatar's key light.
-    const shade = g.createRadialGradient(cx - R * 0.38, cy - R * 0.42, R * 0.08, cx, cy, R);
-    shade.addColorStop(0, '#5b6378');
-    shade.addColorStop(0.55, '#2c3242');
-    shade.addColorStop(1, '#141820');
+    // Sticker look: hard navy shadow below (no blur), then the ball in the brand gradient –
+    // lit from the upper left like the avatar's key light: Glanz-Cyan → Türkis → Blau.
+    g.beginPath();
+    g.arc(cx, cy + 3, R + 1, 0, Math.PI * 2);
+    g.fillStyle = NAVY;
+    g.fill();
+    const shade = g.createRadialGradient(cx - R * 0.38, cy - R * 0.42, R * 0.08, cx, cy, R * 1.05);
+    shade.addColorStop(0, '#d9fdff');
+    shade.addColorStop(0.35, '#5ff0e6');
+    shade.addColorStop(0.75, '#1a9cf5');
+    shade.addColorStop(1, '#006eff');
     g.beginPath();
     g.arc(cx, cy, R, 0, Math.PI * 2);
     g.fillStyle = shade;
@@ -93,10 +101,10 @@ export function orbitBall(store: SettingsStore, ui: Controls): HTMLElement {
             open = false;
           }
         }
-        g.lineWidth = emphasis ? 1.4 : 1;
+        g.lineWidth = emphasis ? 1.6 : 1;
         g.strokeStyle = front
-          ? (emphasis ? 'rgba(167, 139, 250, 0.85)' : 'rgba(255, 255, 255, 0.22)')
-          : (emphasis ? 'rgba(167, 139, 250, 0.22)' : 'rgba(255, 255, 255, 0.06)');
+          ? (emphasis ? 'rgba(6, 24, 56, 0.75)' : 'rgba(255, 255, 255, 0.55)')
+          : (emphasis ? 'rgba(6, 24, 56, 0.18)' : 'rgba(255, 255, 255, 0.16)');
         g.stroke();
       }
     };
@@ -112,48 +120,44 @@ export function orbitBall(store: SettingsStore, ui: Controls): HTMLElement {
       line(pts, lon === 0);
     }
 
-    // Rim.
+    // Specular highlight (hard-edged gloss spot, no glow).
+    g.beginPath();
+    g.ellipse(cx - R * 0.42, cy - R * 0.5, R * 0.16, R * 0.1, -0.6, 0, Math.PI * 2);
+    g.fillStyle = 'rgba(255, 255, 255, 0.85)';
+    g.fill();
+
+    // Navy outline.
     g.beginPath();
     g.arc(cx, cy, R, 0, Math.PI * 2);
-    g.lineWidth = 1;
-    g.strokeStyle = 'rgba(255, 255, 255, 0.16)';
+    g.lineWidth = 2;
+    g.strokeStyle = NAVY;
     g.stroke();
 
-    // Markers: top pole (small) and the avatar's face direction (accent).
-    const marker = (w: V3, radius: number, fill: string) => {
+    // Markers (square = pixel language): top pole (small, navy) and the avatar's face (white, navy outline).
+    const marker = (w: V3, half: number, fill: string) => {
       const p = proj(w);
       const front = p.z >= -0.02;
-      g.beginPath();
-      g.arc(p.x, p.y, radius * (front ? 1 : 0.8), 0, Math.PI * 2);
+      const s = half * (front ? 1 : 0.8);
       if (front) {
         g.fillStyle = fill;
-        g.fill();
-        g.lineWidth = 1.5;
-        g.strokeStyle = '#fff';
-        g.stroke();
+        g.fillRect(p.x - s, p.y - s, s * 2, s * 2);
+        g.lineWidth = 2;
+        g.strokeStyle = NAVY;
+        g.strokeRect(p.x - s, p.y - s, s * 2, s * 2);
       } else {
-        g.lineWidth = 1.2;
-        g.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-        g.stroke();
+        g.lineWidth = 1.5;
+        g.strokeStyle = 'rgba(6, 24, 56, 0.35)';
+        g.strokeRect(p.x - s, p.y - s, s * 2, s * 2);
       }
     };
-    marker([0, 1, 0], 3, '#cfd3dc');
-    marker([0, 0, 1], 6, '#8b5cf6');
-
-    // Specular highlight on top.
-    const hi = g.createRadialGradient(cx - R * 0.42, cy - R * 0.48, 0, cx - R * 0.42, cy - R * 0.48, R * 0.5);
-    hi.addColorStop(0, 'rgba(255, 255, 255, 0.22)');
-    hi.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    g.beginPath();
-    g.arc(cx, cy, R, 0, Math.PI * 2);
-    g.fillStyle = hi;
-    g.fill();
+    marker([0, 1, 0], 2.5, NAVY);
+    marker([0, 0, 1], 5, '#ffffff');
   };
   ui.bind(draw);
 
   // --- Dragging -----------------------------------------------------------------------------
   let drag: { id: number; x0: number; y0: number; yaw0: number; pitch0: number; moved: boolean } | null = null;
-  const degPerPx = () => 180 / Math.PI / (SIZE / 2 - 5); // the grabbed point follows the pointer near the centre
+  const degPerPx = () => 180 / Math.PI / RADIUS; // the grabbed point follows the pointer near the centre
   canvas.addEventListener('pointerdown', (e) => {
     if (drag || e.button !== 0) return;
     e.preventDefault();
