@@ -67,6 +67,9 @@ export const DEFAULT_BASELINE: Float32Array = (() => {
   set('mouthStretch', 0.03); set('mouthFrown', 0.03); set('mouthPress', 0.1); set('mouthDimple', 0.05);
   set('mouthShrugLower', 0.15); set('mouthShrugUpper', 0.1); set('mouthRollLower', 0.05); set('mouthRollUpper', 0.03);
   set('mouthLowerDown', 0.05); set('mouthUpperUp', 0.05); set('mouthLeft', 0.02); set('mouthRight', 0.02);
+  // NOTE: MediaPipe FaceLandmarker 0.10.35 does NOT output tongueOut at all (52 categories = '_neutral' +
+  // 51 ARKit names; verified on real video). rawBs[tongueOut] is therefore always 0 → a tongue expression
+  // can only come from another source (e.g. an expression hotkey), never from the camera.
   set('tongueOut', 0);
   return b;
 })();

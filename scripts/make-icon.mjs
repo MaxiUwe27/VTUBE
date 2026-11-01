@@ -1,5 +1,6 @@
-// Renders the app icon (build/icon.png, 512x512 RGBA) with Node built-ins only.
-// Shapes are point-in-shape tests, anti-aliased by 4x4 supersampling.
+// Renders the app icon (build/icon.png, 512x512 RGBA) with Node built-ins only: a turquoise → blue
+// sticker tile (navy outline, hard shadow) with a white pixel "V". Shapes are point-in-shape tests,
+// anti-aliased by 4x4 supersampling.
 import { deflateSync } from 'node:zlib';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -14,42 +15,50 @@ const inRoundRect = (x, y, x0, y0, x1, y1, r) => {
   const cx = Math.max(x0 + r, Math.min(x, x1 - r)), cy = Math.max(y0 + r, Math.min(y, y1 - r));
   return x >= x0 && x <= x1 && y >= y0 && y <= y1 && (x - cx) ** 2 + (y - cy) ** 2 <= r * r;
 };
-const inEllipse = (x, y, cx, cy, rx, ry) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1;
-const inTri = (x, y, [ax, ay], [bx, by], [cx, cy]) => {
-  const d1 = (x - bx) * (ay - by) - (ax - bx) * (y - by);
-  const d2 = (x - cx) * (by - cy) - (bx - cx) * (y - cy);
-  const d3 = (x - ax) * (cy - ay) - (cx - ax) * (y - ay);
-  return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0));
+
+// Brand colours (MaxiUwe27 style guide): turquoise → blue gradient, navy outlines and hard shadows.
+const TQ = hex('#14ebdc'), BLUE = hex('#006eff'), NAVY = hex('#061838'), WHITE = hex('#ffffff');
+
+// Sticker tile: navy outline + hard navy shadow below (no blur).
+const T = { x0: 24, y0: 16, x1: 488, y1: 480, r: 104, line: 14, drop: 18 };
+
+// Pixel "V" (8×6 cells), white with a navy outline and a hard navy shadow.
+const V = ['XX....XX', 'XX....XX', '.XX..XX.', '.XX..XX.', '..XXXX..', '...XX...'];
+const CELL = 34, VX = 256 - (V[0].length * CELL) / 2, VY = 158, V_LINE = 13, V_DROP = 15;
+const inV = (x, y) => {
+  const c = Math.floor((x - VX) / CELL), r = Math.floor((y - VY) / CELL);
+  return r >= 0 && r < V.length && c >= 0 && c < V[0].length && V[r][c] === 'X';
+};
+/** Square (pixel-style) outline: any V cell within `d` px in x and y. */
+const nearV = (x, y, d) => {
+  for (const dx of [-d, 0, d]) for (const dy of [-d, 0, d]) if (inV(x + dx, y + dy)) return true;
+  return false;
 };
 
-const HAIR = hex('#2a1f45'), SKIN = hex('#fff1e6'), EYE = hex('#2a1f45'), WHITE = hex('#ffffff');
-const EAR_IN = hex('#ff8fbf'), BLUSH = hex('#ff7aa8', 0.45), MOUTH = hex('#c2416f');
-const TOP = hex('#7c5cff'), BOTTOM = hex('#ff5f9e');
+// Pixel corner (guide "Pixel-Ecke"), top-left inside the tile: '#' 100 %, '+' 60 %, '.' 30 % white.
+const CORNER = ['####+#', '##+  .', '#+ #', '+ .', '#', '.'];
+const PC = 14, PX = 64, PY = 58;
+const cornerAlpha = (x, y) => {
+  const c = Math.floor((x - PX) / PC), r = Math.floor((y - PY) / PC);
+  const ch = CORNER[r]?.[c];
+  return ch === '#' ? 1 : ch === '+' ? 0.6 : ch === '.' ? 0.3 : 0;
+};
 
 // Returns the colour layers (bottom to top) covering sample (x, y).
 function layers(x, y) {
   const L = [];
-  if (!inRoundRect(x, y, 16, 16, 496, 496, 112)) return L;
-  L.push(mix(TOP, BOTTOM, (y - 16) / 480));
-  for (const s of [-1, 1]) {           // cat ears
-    const m = (px) => 256 + s * (px - 256);
-    if (inTri(x, y, [m(132), 220], [m(150), 78], [m(250), 150])) L.push(HAIR);
-    if (inTri(x, y, [m(152), 196], [m(163), 112], [m(224), 156])) L.push(EAR_IN);
+  if (inRoundRect(x, y, T.x0, T.y0 + T.drop, T.x1, T.y1 + T.drop, T.r)) L.push(NAVY);         // hard shadow
+  if (inRoundRect(x, y, T.x0, T.y0, T.x1, T.y1, T.r)) L.push(NAVY);                          // outline
+  if (inRoundRect(x, y, T.x0 + T.line, T.y0 + T.line, T.x1 - T.line, T.y1 - T.line, T.r - T.line)) {
+    // Gradient: blue bottom-left → turquoise top-right (125° like the guide's square profile picture).
+    const t = ((x - T.x0) + (T.y1 - y)) / ((T.x1 - T.x0) + (T.y1 - T.y0));
+    L.push(mix(BLUE, TQ, Math.max(0, Math.min(1, t))));
+    const a = cornerAlpha(x, y);
+    if (a) L.push([255, 255, 255, a]);
+    if (nearV(x, y - V_DROP, V_LINE)) L.push(NAVY);                                           // V shadow
+    if (nearV(x, y, V_LINE)) L.push(NAVY);                                                    // V outline
+    if (inV(x, y)) L.push(WHITE);
   }
-  if (inEllipse(x, y, 256, 292, 170, 172) && y < 420) L.push(HAIR); // back hair
-  const face = inEllipse(x, y, 256, 300, 146, 140);
-  if (face) L.push(SKIN);
-  // scalloped bangs
-  const fringe = 238 + 26 * Math.abs(Math.sin(((x - 110) / 292) * Math.PI * 2.5));
-  if (face && y < fringe) L.push(HAIR);
-  for (const ex of [198, 314]) {       // eyes with highlights
-    if (inEllipse(x, y, ex, 312, 21, 32)) L.push(EYE);
-    if (inEllipse(x, y, ex + 7, 299, 8, 9)) L.push(WHITE);
-    if (inEllipse(x, y, ex - 7, 326, 4, 4)) L.push(WHITE);
-  }
-  for (const bx of [166, 346]) if (inEllipse(x, y, bx, 356, 26, 14)) L.push(BLUSH);
-  const r = Math.hypot(x - 256, y - 340);   // smile: lower half ring
-  if (y > 344 && r > 20 && r < 28) L.push(MOUTH);
   return L;
 }
 

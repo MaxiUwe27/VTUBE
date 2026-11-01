@@ -23,32 +23,47 @@
       display: block;
       background: transparent;
     }
+    /* Status/error box in the app's style: navy box, white text and outline, hard shadow (no blur). */
+    @font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; src: url('/fonts/Inter-Medium.woff2') format('woff2'); }
     #status, #msg {
       position: fixed;
-      font: 13px/1.4 system-ui, sans-serif;
+      font: 500 13px/1.45 'Inter', system-ui, sans-serif;
       color: #fff;
-      background: rgba(0, 0, 0, 0.62);
-      padding: 6px 10px;
-      border-radius: 6px;
+      background: #061838;
+      border: 2px solid #fff;
+      box-shadow: 0 3px 0 #061838;
+      padding: 7px 12px;
+      border-radius: 8px;
       pointer-events: none;
       z-index: 10;
     }
     #status {
-      left: 8px;
-      bottom: 8px;
+      left: 10px;
+      bottom: 12px;
       font-size: 12px;
       white-space: pre;
     }
     #msg {
-      left: 8px;
-      top: 8px;
+      left: 10px;
+      top: 10px;
       max-width: 70vw;
       white-space: pre-wrap;
       word-wrap: break-word;
     }
-    #msg div + div { margin-top: 4px; }
-    #msg .error { color: #ffb4b4; }
-    #msg .warn { color: #ffe08a; }
+    #msg div { position: relative; }
+    #msg div + div { margin-top: 5px; }
+    /* square markers: amber = warning, red = error (text stays white) */
+    #msg .warn, #msg .error { padding-left: 16px; }
+    #msg .warn:before, #msg .error:before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 5px;
+      width: 8px;
+      height: 8px;
+      background: #ffb21a;
+    }
+    #msg .error:before { background: #e4202c; outline: 1px solid #fff; }
     #status[hidden], #msg[hidden] { display: none; }
   </style>
 </head>

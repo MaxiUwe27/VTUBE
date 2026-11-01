@@ -34,7 +34,7 @@ Ubuntu: `libfuse2` bzw. `libfuse2t64` nötig (oder `--appimage-extract-and-run`)
 4. Feintuning im Seitenpanel (`Tab`/`F1` blendet es aus): Glättung, Stärken, Emotionen. Doppelklick auf einen Regler setzt ihn zurück.
 5. Kamera einstellen – direkt mit der Maus im Avatar-Fenster: **linke Taste ziehen** dreht die Kamera um den Avatar
    (z. B. leichte Seitenansicht), **rechte/mittlere Taste ziehen** verschiebt, **Mausrad** zoomt, **Doppelklick** setzt
-   die Ansicht zurück. Alternativ unter „Ansicht“: Kugel ziehen, Regler „Orbit horizontal/vertikal“ oder Voreinstellungen
+   die Ansicht zurück. Alternativ unter „Ansicht“: Kugel ziehen, Voreinstellungen oder unter „Mehr Einstellungen“ die Regler „Drehung/Neigung“
    (Frontal, Leicht links/rechts, Profil links/rechts, Von oben – „links/rechts“ = Kamera vom Zuschauer aus gesehen).
    Die Ansicht gilt genauso für OBS-Browserquelle und virtuelle Kamera.
 
@@ -42,7 +42,7 @@ Ubuntu: `libfuse2` bzw. `libfuse2t64` nötig (oder `--appimage-extract-and-run`)
 
 Statt einer Webcam kann das Tracking auch ein Bild aus dem Netz verwenden: In „Kamera & Tracking“
 bei **Kamera** ganz unten **„Browserquelle (URL) …“** wählen, die Adresse einfügen, **Verbinden**.
-Die Seite wird unsichtbar (wie eine OBS-Browserquelle) geladen; „Auflösung“ und „Kamera-FPS“ legen
+Die Seite wird unsichtbar (wie eine OBS-Browserquelle) geladen; „Auflösung“ und „Kamera-FPS“ (unter „Mehr Einstellungen“) legen
 Größe und Bildrate dieser Seite fest. Funktionierende Adressen werden als Vorschläge gemerkt.
 
 | Quelle | Adresse |
@@ -96,7 +96,7 @@ In Discord/OBS-Quelle/Zoom dann die Kamera „VTube Linux“ wählen.
 |---|---|
 | Startoption | `./VTube-Linux-*.AppImage --vcam-device /dev/video10` (oder `--vcam-device=/dev/video10`) |
 | Umgebungsvariable | `VTUBE_CAM_DEVICE=/dev/video10 ./VTube-Linux-*.AppImage` |
-| App | „Ausgabe → Virtuelle Kamera → Gerät“ (Auswahl zeigt Name, Pfad und ob belegt) |
+| App | „Ausgabe → Virtuelle Kamera → Mehr Einstellungen → Gerät“ (Auswahl zeigt Name, Pfad und ob belegt) |
 | Standard | `/dev/video10` |
 
 Ist das Gerät per Startoption/Umgebungsvariable festgelegt, zeigt die App es als „festgelegt“ an und
@@ -117,7 +117,7 @@ v4l2loopback-Geräte mit Pfad, Name und benutzenden Prozessen und beendet sich s
 | OBS-Browserquelle / Browser-Test leer oder weiß | Die Seite zeigt oben links den Grund (keine Verbindung, kein Modell, WebGL fehlt …). „WebGL nicht verfügbar“ in OBS: *Einstellungen → Erweitert → Browserquellen-Hardwarebeschleunigung* an, OBS neu starten. Diagnose: URL mit `?debug`, `http://127.0.0.1:39540/status`, AppImage im Terminal starten (zeigt Verbindungen/Ablehnungen). `?nostatus` blendet die Hinweise aus |
 | Schwarzes Fenster / Absturz beim Start (GPU) | `./VTube-Linux…AppImage --disable-gpu` oder `--ozone-platform=x11` |
 | Browserquelle: „Verbindung abgelehnt“ / „Keine Antwort“ | Läuft die Kamera-App auf dem Handy (Server gestartet, Bildschirm an)? Gleiches WLAN? IP und Port prüfen – die Adresse zuerst im normalen Browser am PC testen |
-| Tracking langsam | In „Kamera & Tracking“ GPU-Beschleunigung an/aus testen; 640×480 reicht völlig |
+| Tracking langsam | In „Kamera & Tracking → Mehr Einstellungen“ „GPU nutzen“ an/aus testen; 640×480 reicht völlig |
 | Avatar schaut schräg | Neu kalibrieren; „Spiegeln“ prüfen |
 | Mund bewegt sich beim Reden zu wenig | Lip-Sync aktivieren, Mund-Empfindlichkeit erhöhen |
 | Virtuelle Kamera heißt „OBS Virtual Camera“ / Bild von OBS kaputt | Nur ein v4l2loopback-Gerät vorhanden → zwei anlegen (siehe oben), `--list-devices` prüfen |
