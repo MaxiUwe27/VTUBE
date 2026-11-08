@@ -18,6 +18,17 @@ function logo(): HTMLElement {
   return el;
 }
 
+/** 7×7 pixel icons for the theme button (X = filled cell). */
+const PIXEL_ICONS = {
+  moon: ['..XXX..', '.XXX...', 'XXX....', 'XXX....', 'XXX....', '.XXX...', '..XXX..'],
+  sun: ['X..X..X', '.......', '..XXX..', 'X.XXX.X', '..XXX..', '.......', 'X..X..X'],
+};
+function pixelIcon(rows: string[]): string {
+  let d = '';
+  rows.forEach((r, y) => [...r].forEach((c, x) => { if (c === 'X') d += `M${x} ${y}h1v1H${x}z`; }));
+  return `<svg viewBox="0 0 7 7" aria-hidden="true"><path fill="currentColor" d="${d}"/></svg>`;
+}
+
 function chip(label: string, title: string): { el: HTMLElement; set(state: 'ok' | 'warn' | 'error' | 'off'): void } {
   const dot = h('span', { class: 'dot dot-off' });
   const el = h('span', { class: 'chip', title }, dot, label);
@@ -43,6 +54,21 @@ export function buildPanel(ctx: AppContext, panel: HTMLElement): { tick(now: num
     vcam: chip('VCam', 'Virtuelle Kamera'),
   };
 
+  // Light / dark panel theme (settings ui.theme → <html data-theme>); the button shows the target theme.
+  const themeBtn = h('button', { type: 'button', class: 'theme-btn' });
+  themeBtn.addEventListener('click', () => store.update({ ui: { theme: store.value.ui.theme === 'dark' ? 'light' : 'dark' } }, 0));
+  let shownTheme = '';
+  ctx.ui.bind(() => {
+    const dark = store.value.ui.theme === 'dark';
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    if (shownTheme === String(dark)) return;
+    shownTheme = String(dark);
+    const label = dark ? 'Helles Design' : 'Dunkles Design';
+    themeBtn.title = label;
+    themeBtn.setAttribute('aria-label', label);
+    themeBtn.innerHTML = pixelIcon(dark ? PIXEL_ICONS.sun : PIXEL_ICONS.moon);
+  });
+
   const closeBtn = h('button', { type: 'button', class: 'head-btn', title: 'Seitenleiste ausblenden (Tab)', 'aria-label': 'Seitenleiste ausblenden' }, icon('panelClose'));
   closeBtn.addEventListener('click', () => actions.togglePanel(false));
 
@@ -53,7 +79,8 @@ export function buildPanel(ctx: AppContext, panel: HTMLElement): { tick(now: num
     h('div', { class: 'chips-row' }, Object.values(chips).map((c) => c.el)),
     h('div', { class: 'stats-row' },
       h('span', { class: 'stat', title: 'Gemessene Render-Bildrate' }, 'Render', renderFps, 'FPS'),
-      h('span', { class: 'stat', title: 'Verarbeitete Kamerabilder pro Sekunde' }, 'Tracking', trackFps, 'FPS')));
+      h('span', { class: 'stat', title: 'Verarbeitete Kamerabilder pro Sekunde' }, 'Tracking', trackFps, 'FPS'),
+      themeBtn));
 
   const sections: SectionModule[] = [
     modelSection(ctx),
