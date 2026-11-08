@@ -19,6 +19,9 @@ import {
   ARKIT_NAMES, BS, BS_GROUP, DEFAULT_BASELINE, FaceMapper, Group, MAX_BASELINE, MIRROR_INDEX, N_BS,
   calibrate, clamp, clamp01, perfectSyncGain, smoothstep,
 } from './mapping';
+import { RangeTracker, SoftDeadzone } from './adaptive';
+import { computeGeometry, makeGeometry } from './faceGeometry';
+import { FaceInputEstimator } from './faceInputs';
 import { EULER_ORDER, HIPS_X_SIGN, HIPS_Z_SIGN, LOOK_PITCH_SIGN, LOOK_YAW_SIGN, PITCH_SIGN, ROLL_SIGN, YAW_SIGN } from './axes';
 
 const DEG = Math.PI / 180;
@@ -29,6 +32,13 @@ const LOST_AFTER_MS = 500;
 const NECK_PIVOT = new Vector3(0, -8, -5);
 /** Without calibration the neutral neck position adapts slowly toward the user's average position. */
 const AUTO_NEUTRAL_TAU_S = 30;
+/** Without calibration the neutral head ROTATION is a running median of the head pose (≈ 34 s window),
+ *  limited to these offsets (degrees) – e.g. a webcam on top of the monitor sees the head pitched down. */
+const AUTO_NEUTRAL_LIMIT = { pitch: 25, yaw: 20, roll: 8 };
+/** Adaptive blendshape baselines: neutral = this quantile of "calm" frames (mouth closed, eyes open). */
+const BASELINE_Q = 0.35;
+/** With a calibration, adaptive baselines may move this far from the calibrated values. */
+const BASELINE_CAL_RANGE = 0.1;
 /** Ring buffer for calibration (raw frames). */
 const CAL_FRAMES = 32;
 const CAL_WINDOW_MS = 500;
@@ -101,7 +111,18 @@ export class PoseSolver {
   private hasNeutralNeck = false;
   private calibrated = false;
   private settingsCalibRef: Calibration | null | undefined = undefined;
-  private calBuf = Array.from({ length: CAL_FRAMES }, () => new Float32Array(N_BS + 6));
+  private calBuf = Array.from({ length: CAL_FRAMES }, () => new Float32Array(N_BS + 8));
+  private calBase: Float32Array | null = null;  // calibrated baselines (null = not calibrated)
+  // Adaptive per-user levels
+  private baseTrk = Array.from({ length: N_BS }, (_, i) => new RangeTracker(DEFAULT_BASELINE[i], DEFAULT_BASELINE[i],
+    { qLo: BASELINE_Q, qHi: BASELINE_Q, tauLoUp: 4, tauLoDown: 2, tauHiUp: 4, tauHiDown: 2, every: 4 }));
+  private effBase = new Float32Array(DEFAULT_BASELINE);
+  private inputs = new FaceInputEstimator();
+  private geo = makeGeometry();
+  private headN = [0, 1, 2].map(() => new RangeTracker(0, 0, { qLo: 0.5, qHi: 0.5, tauLoUp: 8, tauLoDown: 8, tauHiUp: 8, tauHiDown: 8, size: 128, every: 8 }));
+  private headNInit = false;
+  private headDz = [new SoftDeadzone(), new SoftDeadzone(), new SoftDeadzone()];
+  private calm = false;
   private calTs = new Float64Array(CAL_FRAMES).fill(-Infinity);
   private calHead = 0;
 
@@ -144,7 +165,9 @@ export class PoseSolver {
     // One-Euro parameters. smoothing 0 → nearly raw, 1 → very smooth.
     const headMin = geo(5, 0.25, s);         // Hz
     const headBeta = geo(4, 0.25, s);        // per rad/s
-    for (const f of this.rotF) f.setParams(headMin, headBeta, 1);
+    // dCutoff 2.5 Hz: the speed estimate reacts within ~2 frames → less lag at movement onset (the soft
+    // deadzone below takes care of the jitter at rest).
+    for (const f of this.rotF) f.setParams(headMin, headBeta, 2.5);
     for (const f of this.posF) f.setParams(headMin, headBeta * 0.04, 1); // per cm/s
     const groupParams: [number, number, number][] = [];
     groupParams[Group.Blink] = [Math.max(3, 4 * headMin), 4, 2];   // blinks must stay snappy
@@ -156,6 +179,7 @@ export class PoseSolver {
       this.bsF[i].setParams(mc, b, dc);
       this.psGain[i] = perfectSyncGain(i, t);
     }
+    this.inputs.setFilters(groupParams[Group.Blink][0], groupParams[Group.Mouth][0], 1.5 * headMin);
     this.tauHead = 0.02 + 0.05 * s;
     this.tauMouth = 0.025 + 0.02 * s;
     this.tauEmoUp = 0.08 + 0.15 * s;
@@ -191,6 +215,8 @@ export class PoseSolver {
       for (const fl of this.posF) fl.reset();
       for (const fl of this.bsF) fl.reset();
       this.mapper.reset();
+      this.inputs.reset();
+      for (const d of this.headDz) d.reset();
       dt = 0;
     }
     this.lastDetTs = f.timestamp;
@@ -209,9 +235,11 @@ export class PoseSolver {
     this.calHead = (this.calHead + 1) % CAL_FRAMES;
 
     // ── Head rotation ── (absolute, user perspective) → filtered → relative to the neutral pose.
-    const pitch = this.rotF[0].filter(r.x, dt);
-    const yaw = this.rotF[1].filter(r.y, dt);
-    const roll = this.rotF[2].filter(r.z, dt);
+    const dz = Math.max(0, this.t.headDeadzone ?? 0) * DEG;
+    const pitch = this.headDz[0].filter(this.rotF[0].filter(r.x, dt), dz);
+    const yaw = this.headDz[1].filter(this.rotF[1].filter(r.y, dt), dz);
+    const roll = this.headDz[2].filter(this.rotF[2].filter(r.z, dt), dz);
+    if (!this.calibrated) this.autoNeutral(pitch, yaw, roll, dt);
     userQuat(pitch, yaw, roll, this.e, this.q);                // absolute head orientation (camera frame)
     this.q2.copy(this.neutralQInv).multiply(this.q);           // local delta: neutral⁻¹ · current
     this.e.setFromQuaternion(this.q2, EULER_ORDER);
@@ -230,8 +258,15 @@ export class PoseSolver {
 
     // ── Blendshapes ──
     for (let i = 0; i < N_BS; i++) this.filtBs[i] = this.bsF[i].filter(this.rawBs[i], dt);
-    calibrate(this.filtBs, this.baseline, this.calBs);
-    const feat = this.mapper.update(this.calBs, this.t);
+    const adaptive = this.t.adaptiveTracking !== false;
+    const base = adaptive ? this.adaptBaselines(dt) : this.baseline;
+    calibrate(this.filtBs, base, this.calBs);
+    const geoOk = computeGeometry(f.landmarks, f.aspect, this.geo);
+    const inp = this.inputs.update(geoOk ? this.geo : null, this.filtBs, this.rawBs, th.pitch, yaw, this.t, dt);
+    slot[N_BS + 6] = this.inputs.rawGazeYaw; slot[N_BS + 7] = this.inputs.rawGazePitch;
+    const feat = this.mapper.update(this.calBs, this.t, inp);
+    // "Calm" face (mouth closed, eyes open) → the next frame may update the neutral baselines.
+    this.calm = feat.open < 0.3 && Math.max(inp.closeL, inp.closeR) < 0.35;
     const te = this.tgtExpr;
     te.blinkL = feat.blinkL; te.blinkR = feat.blinkR;
     te.aa = feat.aa; te.ih = feat.ih; te.ou = feat.ou; te.ee = feat.ee; te.oh = feat.oh;
@@ -458,6 +493,7 @@ export class PoseSolver {
       blendshapes,
       headRotation: { x: med(N_BS), y: med(N_BS + 1), z: med(N_BS + 2) },
       headPosition: { x: med(N_BS + 3), y: med(N_BS + 4), z: med(N_BS + 5) },
+      gaze: { yaw: Math.round(med(N_BS + 6) * 100) / 100, pitch: Math.round(med(N_BS + 7) * 100) / 100 },
     };
     // Apply immediately; the app should persist it in tracking.calibration. A later updateSettings only
     // replaces it when the settings' calibration object changes.
@@ -469,12 +505,17 @@ export class PoseSolver {
 
   private applyCalibration(c: Calibration | null): void {
     this.calibrated = !!c;
+    let hasBs = false;
     for (let i = 0; i < N_BS; i++) {
       const v = c?.blendshapes?.[ARKIT_NAMES[i]];
-      this.baseline[i] = typeof v === 'number' && Number.isFinite(v)
-        ? clamp(v, 0, MAX_BASELINE)
-        : DEFAULT_BASELINE[i];
+      const ok = typeof v === 'number' && Number.isFinite(v);
+      hasBs ||= ok;
+      this.baseline[i] = ok ? clamp(v, 0, MAX_BASELINE) : DEFAULT_BASELINE[i];
+      this.baseTrk[i].reset(this.baseline[i], this.baseline[i]); // adaptive baselines restart there
     }
+    this.calBase = hasBs ? Float32Array.from(this.baseline) : null;
+    this.inputs.setCalibration(c?.gaze);
+    this.headNInit = false;
     if (c) {
       const r = c.headRotation, p = c.headPosition;
       userQuat(r.x, r.y, r.z, this.e, this.neutralQ);
@@ -487,6 +528,34 @@ export class PoseSolver {
       this.neutralQInv.identity();
       this.hasNeutralNeck = false; // re-seeded from the next detected frame
     }
+  }
+
+  /** Adaptive neutral baselines: running low quantile of calm frames per blendshape. */
+  private adaptBaselines(dt: number): Float32Array {
+    const cal = this.calBase, out = this.effBase;
+    for (let i = 0; i < N_BS; i++) {
+      const tr = this.baseTrk[i];
+      if (this.calm) tr.push(this.filtBs[i], dt);
+      let b = tr.warm ? tr.lo : this.baseline[i];
+      if (cal) b = clamp(b, cal[i] - BASELINE_CAL_RANGE, cal[i] + BASELINE_CAL_RANGE);
+      out[i] = clamp(b, 0, MAX_BASELINE);
+    }
+    return out;
+  }
+
+  /** Uncalibrated: neutral head rotation = running median of the (absolute) head pose, limited. */
+  private autoNeutral(pitch: number, yaw: number, roll: number, dt: number): void {
+    const [np, ny, nr] = this.headN;
+    if (!this.headNInit) {
+      np.reset(pitch, pitch); ny.reset(yaw, yaw); nr.reset(roll, roll);
+      this.headNInit = true;
+    } else {
+      np.push(pitch, dt); ny.push(yaw, dt); nr.push(roll, dt);
+    }
+    const L = AUTO_NEUTRAL_LIMIT;
+    userQuat(clamp(np.lo, -L.pitch * DEG, L.pitch * DEG), clamp(ny.lo, -L.yaw * DEG, L.yaw * DEG),
+      clamp(nr.lo, -L.roll * DEG, L.roll * DEG), this.e, this.neutralQ);
+    this.neutralQInv.copy(this.neutralQ).invert();
   }
 
   private boneQuat(pitch: number, yaw: number, roll: number): Quat {

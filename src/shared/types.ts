@@ -19,6 +19,10 @@ export interface FaceFrame {
   blendshapes: Record<string, number>;  // MediaPipe/ARKit 52 names, e.g. "eyeBlinkLeft", "jawOpen"; 0..1
   headRotation: Vec3;                   // radians
   headPosition: Vec3;                   // cm
+  /** Face mesh incl. iris (478 × x,y,z interleaved, normalized to the non-mirrored image), optional. */
+  landmarks?: Float32Array;
+  /** Image width / height of the frame the landmarks refer to (to compare x and y distances). */
+  aspect?: number;
 }
 
 /** Microphone lip-sync analysis for one audio tick. */

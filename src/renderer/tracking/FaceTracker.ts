@@ -526,6 +526,10 @@ export class FaceTracker {
         if (n !== '_neutral') frame.blendshapes[n] = r.scores[i];
       }
       this.lmData = r.landmarks;
+      // Whole mesh incl. iris: already a Float32Array transferred from the worker (no copy here).
+      frame.landmarks = r.landmarks;
+      const vw = this.video.videoWidth, vh = this.video.videoHeight;
+      frame.aspect = vw > 0 && vh > 0 ? vw / vh : 4 / 3;
     } else {
       this.lmData = null;
     }

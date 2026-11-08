@@ -18,6 +18,9 @@ export interface Calibration {
   blendshapes: Record<string, number>; // neutral-face baseline per blendshape (subtracted, then rescaled)
   headRotation: { x: number; y: number; z: number };
   headPosition: { x: number; y: number; z: number };
+  /** Neutral eye gaze (fused iris + eyeLook estimate, degrees, user perspective). Optional: older
+   *  calibrations without it use the automatic gaze neutral. */
+  gaze?: { yaw: number; pitch: number };
 }
 
 export interface TrackingSettings {
@@ -38,6 +41,11 @@ export interface TrackingSettings {
   emotionSensitivity: Record<EmotionKey, number>; // per emotion multiplier, 0 disables
   usePerfectSync: boolean;         // drive ARKit custom expressions directly if the model has them
   calibration: Calibration | null;
+  /** Learn per-user levels while tracking: open/closed eyes, mouth range, neutral blendshape baselines
+   *  (emotion thresholds). Works with and without calibration. */
+  adaptiveTracking: boolean;
+  irisGaze: boolean;               // eye gaze from the iris landmarks (fused with eyeLook blendshapes)
+  headDeadzone: number;            // degrees; soft deadzone against micro-jitter of the head at rest
 }
 
 export interface LipSyncSettings {
@@ -102,6 +110,9 @@ export const DEFAULT_SETTINGS: Settings = {
     emotionSensitivity: { happy: 1, angry: 1, sad: 1, relaxed: 0.6, surprised: 1 },
     usePerfectSync: true,
     calibration: null,
+    adaptiveTracking: true,
+    irisGaze: true,
+    headDeadzone: 0.3,
   },
   lipSync: { enabled: false, deviceId: null, gain: 1.5, noiseGate: 0.08, mix: 0.6 },
   view: {

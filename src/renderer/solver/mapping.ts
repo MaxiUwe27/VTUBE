@@ -6,6 +6,7 @@
 // once per camera frame.
 
 import type { EmotionKey, TrackingSettings } from '../../shared/settings';
+import type { FaceInputs } from './faceInputs';
 
 export const ARKIT_NAMES = [
   'browDownLeft', 'browDownRight', 'browInnerUp', 'browOuterUpLeft', 'browOuterUpRight',
@@ -119,9 +120,10 @@ export const EMOTIONS: readonly EmotionKey[] = ['happy', 'angry', 'sad', 'relaxe
 const EMO_ON = 0.14;
 const EMO_OFF = 0.05;
 
-/** Eye closure mapping. MediaPipe rarely exceeds ~0.6-0.8 for a closed eye; calibrated ~0.45-0.6. */
-const BLINK_LO = 0.14;
-const BLINK_HI = 0.48;
+/** Eye closure curve on the adaptive closure (0 ≈ open, 1 ≈ the user's typical full blink): small
+ *  noise at rest stays 0, a natural blink (≈ 0.85-1.1) reaches 1. */
+const BLINK_LO = 0.22;
+const BLINK_HI = 0.78;
 
 /** Stateful mapper (emotion hysteresis, gaze hold during blinks). */
 export class FaceMapper {
@@ -138,28 +140,21 @@ export class FaceMapper {
     this.emoActive.fill(0);
   }
 
-  /** `c` = calibrated + smoothed blendshapes (user perspective). */
-  update(c: Float32Array, t: TrackingSettings): FaceFeatures {
+  /** `c` = calibrated + smoothed blendshapes, `inp` = eye/mouth/gaze inputs (user perspective). */
+  update(c: Float32Array, t: TrackingSettings, inp: FaceInputs): FaceFeatures {
     const f = this.f;
     const avg = (a: number, b: number) => 0.5 * (c[a] + c[b]);
 
-    // ── Eyes ──
-    // Looking down lowers the upper lid and raises eyeBlink; compensate a bit (fades out when the
-    // eye is clearly closing so real blinks are never suppressed). Squinting adds a little closure.
+    // ── Eyes ── (closure from FaceInputEstimator: blendshape + lid geometry, per-user adaptive range)
     const blinkSens = Math.max(0.05, t.blinkSensitivity);
-    const eyeL = c[BS.eyeBlinkLeft] + 0.2 * c[BS.eyeSquintLeft]
-      - 0.3 * c[BS.eyeLookDownLeft] * (1 - ramp(c[BS.eyeBlinkLeft], 0.3, 0.6));
-    const eyeR = c[BS.eyeBlinkRight] + 0.2 * c[BS.eyeSquintRight]
-      - 0.3 * c[BS.eyeLookDownRight] * (1 - ramp(c[BS.eyeBlinkRight], 0.3, 0.6));
-    f.blinkL = smoothstep(eyeL * blinkSens, BLINK_LO, BLINK_HI);
-    f.blinkR = smoothstep(eyeR * blinkSens, BLINK_LO, BLINK_HI);
-    f.eyeHalf = clamp01(0.5 * (eyeL + eyeR) * blinkSens / BLINK_HI);
+    f.blinkL = smoothstep(inp.closeL * blinkSens, BLINK_LO, BLINK_HI);
+    f.blinkR = smoothstep(inp.closeR * blinkSens, BLINK_LO, BLINK_HI);
+    f.eyeHalf = clamp01(0.5 * (inp.closeL + inp.closeR) * blinkSens);
 
     // ── Mouth ──
     const ms = Math.max(0, t.mouthSensitivity);
-    const lipsApart = Math.max(0, c[BS.jawOpen] - 0.8 * c[BS.mouthClose])
-      + 0.15 * (avg(BS.mouthLowerDownLeft, BS.mouthLowerDownRight) + avg(BS.mouthUpperUpLeft, BS.mouthUpperUpRight));
-    const open = ramp(lipsApart * ms, 0.04, 0.5);
+    // Openness from FaceInputEstimator (jawOpen + inner-lip gap, adaptive closed/open levels).
+    const open = ramp(inp.open * ms, 0.05, 0.8);
     const pucker = ramp(c[BS.mouthPucker] * ms, 0.1, 0.6);
     const funnel = ramp(c[BS.mouthFunnel] * ms, 0.05, 0.45);
     const smile = avg(BS.mouthSmileLeft, BS.mouthSmileRight);
@@ -170,7 +165,9 @@ export class FaceMapper {
     f.open = open;
     let aa = open * (1 - 0.85 * round) * (1 - 0.5 * wide);
     let oh = round * ramp(open, 0.05, 0.35) * (0.4 + 0.6 * funnelShare);
-    let ou = round * (1 - ramp(open, 0.15, 0.5)) * (0.4 + 0.6 * (1 - funnelShare));
+    // MediaPipe's mouthPucker swings strongly on closed mouths for some faces → a fully closed mouth
+    // shows at most 30 % of an "ou" (deliberate kiss faces still show; perfect sync gets pucker directly).
+    let ou = round * (1 - ramp(open, 0.15, 0.5)) * (0.4 + 0.6 * (1 - funnelShare)) * (0.3 + 0.7 * ramp(open, 0.02, 0.15));
     let ih = wide * (1 - round) * ramp(open, 0.02, 0.12) * (1 - ramp(open, 0.2, 0.45));
     let ee = wide * (1 - round) * ramp(open, 0.15, 0.4);
     const sum = aa + oh + ou + ih + ee;
@@ -224,13 +221,11 @@ export class FaceMapper {
     if (total > 1) for (let i = 0; i < 5; i++) raw[i] /= total;
     f.happy = raw[0]; f.angry = raw[1]; f.sad = raw[2]; f.relaxed = raw[3]; f.surprised = raw[4];
 
-    // ── Gaze ── (hold the last value while the eyes are closing: lids drag eyeLookDown along)
+    // ── Gaze ── (iris + eyeLook fusion relative to neutral, see FaceInputEstimator; held while blinking)
     if (Math.max(f.blinkL, f.blinkR) < 0.5) {
-      const left = 0.5 * (c[BS.eyeLookOutLeft] + c[BS.eyeLookInRight]) - 0.5 * (c[BS.eyeLookInLeft] + c[BS.eyeLookOutRight]);
-      const up = avg(BS.eyeLookUpLeft, BS.eyeLookUpRight) - avg(BS.eyeLookDownLeft, BS.eyeLookDownRight);
       const gs = t.eyeGazeScale;
-      f.gazeYaw = clamp(left * 40 * gs, -35, 35);
-      f.gazePitch = clamp(up * 30 * gs, -25, 25);
+      f.gazeYaw = clamp(inp.gazeYaw * gs, -35, 35);
+      f.gazePitch = clamp(inp.gazePitch * gs, -25, 25);
     }
     return f;
   }
