@@ -137,7 +137,7 @@ function createWindow(): void {
     height: 900,
     minWidth: 960,
     minHeight: 600,
-    backgroundColor: '#eef4f9',
+    backgroundColor: store.get().ui.theme === 'dark' ? '#040f24' : '#eef4f9', // panel background of the theme
     title: 'VTube Linux',
     ...(appIcon ? { icon: appIcon } : {}),
     show: false,

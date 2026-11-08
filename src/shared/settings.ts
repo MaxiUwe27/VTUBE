@@ -78,7 +78,7 @@ export interface Settings {
   view: ViewSettings;
   output: OutputSettings;
   model: { lastPath: string | null; recent: string[] };
-  ui: { panelOpen: boolean };
+  ui: { panelOpen: boolean; theme: 'light' | 'dark' };
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -123,7 +123,7 @@ export const DEFAULT_SETTINGS: Settings = {
     virtualCam: { enabled: false, device: '/dev/video10', width: 1280, height: 720, fps: 30 },
   },
   model: { lastPath: null, recent: [] },
-  ui: { panelOpen: true },
+  ui: { panelOpen: true, theme: 'light' },
 };
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? (T[K] extends unknown[] ? T[K] : DeepPartial<T[K]>) : T[K] };
