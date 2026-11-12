@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VTube Linux – Output</title>
+  <link rel="icon" href="data:," />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent !important;
+    }
+    #avatar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      background: transparent;
+    }
+    /* Status/error box in the app's style: navy box, white text and outline, hard shadow (no blur). */
+    @font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; src: url('/fonts/Inter-Medium.woff2') format('woff2'); }
+    #status, #msg {
+      position: fixed;
+      font: 500 13px/1.45 'Inter', system-ui, sans-serif;
+      color: #fff;
+      background: #061838;
+      border: 2px solid #fff;
+      box-shadow: 0 3px 0 #061838;
+      padding: 7px 12px;
+      border-radius: 8px;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #status {
+      left: 10px;
+      bottom: 12px;
+      font-size: 12px;
+      white-space: pre;
+    }
+    #msg {
+      left: 10px;
+      top: 10px;
+      max-width: 70vw;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    #msg div { position: relative; }
+    #msg div + div { margin-top: 5px; }
+    /* square markers: amber = warning, red = error (text stays white) */
+    #msg .warn, #msg .error { padding-left: 16px; }
+    #msg .warn:before, #msg .error:before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 5px;
+      width: 8px;
+      height: 8px;
+      background: #ffb21a;
+    }
+    #msg .error:before { background: #e4202c; outline: 1px solid #fff; }
+    #status[hidden], #msg[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="avatar"></canvas>
+  <div id="msg" hidden></div>
+  <div id="status" hidden></div>
+  <!-- Status/error box. Deliberately plain ES5 and inline: it must work even when the module
+       bundle fails to load or crashes (old OBS/CEF builds, script errors). output.ts takes over
+       via window.VTubeStatus. "?nostatus" hides the box. -->
+  <script>
+  (function () {
+    var hide = /[?&]nostatus(=|&|$)/.test(location.search);
+    var el = document.getElementById('msg');
+    var entries = {};
+    var order = ['js', 'boot', 'webgl', 'conn', 'model'];
+    var api = {
+      good: false,
+      set: function (key, text, level, ttlMs) {
+        var e = { text: String(text), level: level || 'info', until: ttlMs ? Date.now() + ttlMs : 0 };
+        entries[key] = e;
+        if (ttlMs) setTimeout(function () { if (entries[key] === e) api.clear(key); }, ttlMs);
+        render();
+      },
+      clear: function (key) {
+        if (entries[key]) { delete entries[key]; render(); }
+      },
+      setGood: function (good) {
+        // Avatar is visible and live: errors from before no longer matter.
+        if (good && !api.good) delete entries.js;
+        api.good = !!good;
+        render();
+      },
+      booted: function () {
+        api.isBooted = true;
+        api.clear('boot');
+      },
+      isBooted: false
+    };
+    function render() {
+      if (!el) return;
+      var keys = [], k, i;
+      for (i = 0; i < order.length; i++) if (entries[order[i]]) keys.push(order[i]);
+      for (k in entries) if (entries.hasOwnProperty(k) && keys.indexOf(k) < 0) keys.push(k);
+      while (el.firstChild) el.removeChild(el.firstChild);
+      for (i = 0; i < keys.length; i++) {
+        var d = document.createElement('div');
+        d.className = entries[keys[i]].level;
+        d.textContent = entries[keys[i]].text;
+        el.appendChild(d);
+      }
+      el.hidden = hide || keys.length === 0;
+    }
+    function jsError(msg) {
+      var text = 'Fehler auf der Ausgabeseite: ' + msg;
+      if (window.console && console.error) console.error('[output] ' + text);
+      // While everything works, show late errors only briefly.
+      api.set('js', text, 'error', api.good ? 15000 : 0);
+    }
+    window.addEventListener('error', function (ev) {
+      if (ev && ev.target && ev.target !== window && ev.target.tagName) {
+        jsError('Datei konnte nicht geladen werden: ' + (ev.target.src || ev.target.href || ev.target.tagName));
+        return;
+      }
+      jsError((ev && (ev.message || (ev.error && ev.error.message))) || 'unbekannter Fehler');
+    }, true);
+    window.addEventListener('unhandledrejection', function (ev) {
+      var r = ev && ev.reason;
+      jsError((r && r.message) || String(r));
+    });
+    window.VTubeStatus = api;
+    // Watchdog: the module script never started (too old browser, blocked/missing script).
+    setTimeout(function () {
+      if (!api.isBooted) {
+        api.set('boot', 'Ausgabeseite konnte nicht gestartet werden – Browser/OBS zu alt oder Skript blockiert. ' +
+          'Bitte OBS bzw. den Browser aktualisieren.', 'error');
+      }
+    }, 6000);
+  })();
+  </script>
+  <script nomodule>
+    window.VTubeStatus && window.VTubeStatus.set('boot', 'Dieser Browser ist zu alt (keine ES-Module). Bitte OBS bzw. den Browser aktualisieren.', 'error');
+  </script>
+  <script type="module" src="./output/output.ts"></script>
+</body>
+</html>
