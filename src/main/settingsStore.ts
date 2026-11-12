@@ -68,7 +68,9 @@ export class SettingsStore {
 
 /** Repair values the main process relies on (ports, paths). */
 function sanitize(input: Settings): Settings {
-  const s = structuredClone(input); // never mutate objects shared with the previous snapshot
+  // never mutate objects shared with the previous snapshot; wrong-typed values (hand-edited file,
+  // e.g. {"ui": null}) fall back to the defaults so later `s.ui.theme` etc. can't throw.
+  const s = conformTo(DEFAULT_SETTINGS, structuredClone(input)) as Settings;
   s.version = 1;
   const bs = s.output.browserSource;
   if (!Number.isInteger(bs.port) || bs.port < 1024 || bs.port > 65535) bs.port = DEFAULT_SETTINGS.output.browserSource.port;
@@ -78,4 +80,18 @@ function sanitize(input: Settings): Settings {
   s.model.recent = s.model.recent.filter((p): p is string => typeof p === 'string').slice(0, 10);
   if (typeof s.model.lastPath !== 'string') s.model.lastPath = null;
   return s;
+}
+
+/** Replaces values whose type differs from the default (nested objects recursively; extra keys kept).
+ *  Defaults that are null (deviceId, calibration, lastPath) accept anything – checked elsewhere. */
+function conformTo(def: unknown, v: unknown): unknown {
+  if (def === null || def === undefined) return v;
+  if (Array.isArray(def)) return Array.isArray(v) ? v : structuredClone(def);
+  if (typeof def === 'object') {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return structuredClone(def);
+    const out = v as Record<string, unknown>;
+    for (const [k, d] of Object.entries(def as Record<string, unknown>)) out[k] = conformTo(d, out[k]);
+    return out;
+  }
+  return typeof v === typeof def ? v : def;
 }

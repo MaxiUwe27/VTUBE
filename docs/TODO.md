@@ -37,3 +37,16 @@ MediaPipe liefert **kein** `tongueOut` → Zunge nur per Taste möglich.
 - Ubuntu 24.04+: Start nur mit `--no-sandbox` (AppArmor) – ggf. AppArmor-Profil mitliefern.
 - Kein englisches UI (bewusst).
 - Virtuelle-Kamera-Auslesen ist synchron (`readPixels`) – bei Ruckeln auf `readRenderTargetPixelsAsync` umstellen.
+
+## 5. Technische Verbesserungen (aus Code-Review, nach Nutzen/Aufwand)
+- [ ] **Automatische Tests** (Vitest o. ä., in CI vor `dist`): Bildraten-Begrenzer, `OutputServer` (Host/Origin/
+      Ablehnung), `mergeSettings`/`sanitize`, `LatestQueue`, `VirtualCam` mit Fake-ffmpeg, Solver-Vorzeichen, Ausdrucks-Zuordnung.
+- [ ] Virtuelle Kamera: Puffer wiederverwenden, asynchron auslesen, Bilder per `MessagePort` übertragen statt
+      contextBridge + IPC-Kopie (bei 1080p sonst ~8 MB pro Bild mehrfach kopiert).
+- [ ] Browserquelle als Kamera: ebenfalls `MessagePort` statt zwei Kopien pro Bild.
+- [ ] Auslese-Puffer der virtuellen Kamera beim Stoppen freigeben.
+- [ ] OBS-Seite: Modell erst an den Server geben, wenn die App es fertig geladen hat (kaputte Datei landet sonst in OBS);
+      letztes Modell wird beim Start doppelt gelesen.
+- [ ] Content-Security-Policy in `index.html` / `output.html`.
+- [ ] CI: `contents: write` nur für den Release-Schritt, Actions per SHA fixieren, Tag gegen `package.json`-Version
+      prüfen, Prüfsumme für das MediaPipe-Modell in `prepare-assets.mjs`, `THIRD_PARTY_NOTICES.txt` beim Build erzeugen.

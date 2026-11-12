@@ -120,6 +120,7 @@ async function setModel(url: string | null, rev: number): Promise<void> {
     if (currentModelKey !== key) return; // superseded by a newer model message
     modelError = errText(err);
     modelName = '';
+    currentModelKey = null; // let the model message sent on reconnect retry the download
     console.warn('[output] model load failed:', modelError);
   } finally {
     if (currentModelKey === key) modelLoadingSince = 0;

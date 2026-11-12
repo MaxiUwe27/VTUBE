@@ -294,6 +294,9 @@ export class OutputServer {
     else if (!this.allowedHost(req.headers.host)) { reason = 'host'; this.logReject('host', req.headers.host, req); }
     else if (!this.allowedOrigin(req.headers.origin)) { reason = 'origin'; this.logReject('origin', req.headers.origin, req); }
     if (reason) {
+      // After 'upgrade' Node's http server no longer listens for socket errors; without this a client
+      // that resets the connection raises an uncaught ECONNRESET (modal error dialog in Electron's main).
+      socket.on('error', () => socket.destroy());
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
