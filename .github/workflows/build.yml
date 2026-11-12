@@ -32,6 +32,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
           name: VTube-Linux-AppImage
@@ -44,5 +45,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          name: VTube Linux ${{ github.ref_name }}
           files: release/*.AppImage
-          generate_release_notes: true
+          body_path: .github/RELEASE_NOTES.md

@@ -20,8 +20,9 @@ Ohne FUSE (z.B. Container): `./VTube-Linux-*.AppImage --appimage-extract-and-run
 Auf Fedora/Nobara ist FUSE normalerweise vorhanden (`sudo dnf install fuse fuse-libs` falls nicht).
 Icon neu erzeugen: `npm run icon` (`scripts/make-icon.mjs` → `build/icon.png`).
 
-GitHub Actions (`.github/workflows/build.yml`) baut bei jedem Push ein AppImage (Artifact);
-ein Tag `v*` erzeugt zusätzlich ein GitHub-Release.
+GitHub Actions (`.github/workflows/build.yml`) baut bei jedem Push ein AppImage (Artifact, 3 Tage aufbewahrt).
+**Release:** `version` in `package.json` erhöhen, committen, Tag setzen und pushen
+(`git tag v0.2.0 && git push origin v0.2.0`) – der Workflow hängt das AppImage an ein neues GitHub-Release.
 
 ## Start-Optionen
 | Option | Wirkung |

@@ -1,11 +1,12 @@
-# Offene Punkte (Stand 2026-11-08)
+# Fahrplan & offene Punkte
 
-Kurzüberblick, wo als Nächstes angesetzt wird. Reihenfolge = Priorität.
+Was als Nächstes kommt und was bekannt nicht perfekt ist. Reihenfolge = Priorität.
+Wünsche und Fehlerberichte gerne als Issue.
 
-## 1. Gesichtstracking – erledigt (2026-11-08), Nachbesserung offen
+## 1. Gesichtstracking – Nachbesserungen
 Umgesetzt in `solver/adaptive.ts`, `faceGeometry.ts`, `faceInputs.ts`, `PoseSolver.ts`, `mapping.ts`; Landmarks
 gehen ohne Kopie über `FaceFrame.landmarks`. Neue Einstellungen ohne UI: `tracking.adaptiveTracking`, `irisGaze`,
-`headDeadzone` (0,3°). Messskripte: `scratchpad/track2/ev` (`run.sh orig|new`, `metrics.py`).
+`headDeadzone` (0,3°).
 - [x] Adaptive Grundwerte pro Person (Median im Ruhezustand, mit Kalibrierung max. ±0,1 Drift).
 - [x] Blinzeln: Blendshape + Augen-Seitenverhältnis, Blick-nach-unten-Ausgleich, fernes Auge folgt bei Kopfdrehung > 15°.
 - [x] Blick: 60 % Iris + 40 % Blendshapes, Neutral aus Kalibrierung bzw. Median.
@@ -23,17 +24,16 @@ MediaPipe liefert **kein** `tongueOut` → Zunge nur per Taste möglich.
 - [ ] Gilt auch für OBS-Seite (läuft über AvatarPose automatisch). UI: kleiner Abschnitt „Ausdruck-Tasten“.
 - [ ] Hinweis: globale Tasten (wenn App nicht im Fokus) brauchen unter Wayland das GlobalShortcuts-Portal.
 
-## 3. Vom Nutzer noch zu testen / Rückmeldung nötig
+## 3. Noch nicht mit echter Hardware getestet (Rückmeldungen willkommen)
 - [ ] Gesichtstracking mit echter Webcam (Emotions-Schwellen ggf. nachregeln).
-- [ ] Dark Mode (Knopf oben rechts) – Punkte im Kopfbereich und „AKTIV“-Abzeichen ungeprüft. Perfect-Sync-Anzeige ungetestet (kein Testmodell).
+- [ ] Perfect-Sync-Modelle (kein Testmodell mit ARKit-Blendshapes vorhanden).
 - [ ] Virtuelle Kamera mit echtem v4l2loopback + OBS gleichzeitig.
 - [ ] Handy als Kamera (IP Webcam / VDO.Ninja).
 - [ ] Minimieren unter KWin/Wayland: läuft OBS-Ausgabe weiter?
-- [ ] Neuer Avatar aus Unity nach `docs/AVATAR_ANLEITUNG.md`.
+- [ ] Avatar-Export aus Unity nach `docs/AVATAR_ANLEITUNG.md`.
 
 ## 4. Bekannte Einschränkungen / später
 - Lip-Sync: O/U-Verwechslung, braucht einige Sekunden Sprache zur Anpassung; `noiseSuppression` evtl. abschaltbar machen.
 - Ubuntu 24.04+: Start nur mit `--no-sandbox` (AppArmor) – ggf. AppArmor-Profil mitliefern.
 - Kein englisches UI (bewusst).
 - Virtuelle-Kamera-Auslesen ist synchron (`readPixels`) – bei Ruckeln auf `readRenderTargetPixelsAsync` umstellen.
-- Unabhängige Gesamtprüfung nach Design-Umbau wurde auf Wunsch übersprungen.

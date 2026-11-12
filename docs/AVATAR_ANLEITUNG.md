@@ -1,6 +1,6 @@
 # Avatar-Anforderungen für VTube Linux (Konvertierung in Unity)
 
-Auftrag für den Konvertierer (Mensch oder KI mit Unity-Zugriff): Aus dem VRChat-Avatar eine **VRM-Datei**
+Anleitung für die Konvertierung in Unity (z. B. aus einem VRChat-Avatar): Aus dem Avatar eine **VRM-Datei**
 erzeugen, die in VTube Linux (three.js + @pixiv/three-vrm) **ohne automatische Notlösungen** voll funktioniert.
 Die App läuft im Webbrowser-Kern – also gelten glTF/WebGL-Grenzen, nicht Unity-Grenzen.
 
@@ -69,7 +69,7 @@ Regeln:
   (Umrisse, Schattenfarbe, Transparenz bei Haaren: Cutout statt Transparent, wo möglich).
 - Texturen max. 2048 px (Gesicht ggf. 4096). Dateigröße möglichst **< 50 MB**.
 - **Unbenutzte Blendshapes löschen** (z. B. `shrink_*`, `vrc.v_sil/ch/dd/ff/kk/nn/pp/rr/ss/th`, MMD-Extras, die nicht
-  gebraucht werden) – das spart Grafikspeicher erheblich (beim alten Avatar: 97 MB Morph-Daten).
+  gebraucht werden) – das spart Grafikspeicher erheblich (konvertierte VRChat-Avatare haben schnell 100 MB Morph-Daten).
 - Meshes sinnvoll zusammenfassen (Kleidung zu wenigen Meshes), Gesicht als eigenes Mesh lassen.
 
 ## 8. Meta

@@ -185,7 +185,7 @@ export class UrlSource {
     ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
     ses.setPermissionCheckHandler(() => false);
     // Look like a normal Chrome (some sites refuse or degrade "Electron" user agents).
-    ses.setUserAgent(ses.getUserAgent().replace(/\s(?:Electron|vtube-studio-linux|VTube Linux)\/\S+/gi, ''));
+    ses.setUserAgent(ses.getUserAgent().replace(/\s(?:Electron|vtube-linux|vtube-studio-linux|VTube Linux)\/\S+/gi, ''));
     // A URL that is a file download (e.g. .mkv served as attachment) must not end up on disk.
     ses.on('will-download', (e, _item, wc) => {
       e.preventDefault();

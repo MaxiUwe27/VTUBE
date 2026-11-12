@@ -1,30 +1,57 @@
-# VTube Linux
+<p align="center"><img src="build/icon.png" width="96" alt="VTube Linux Logo"></p>
 
-VTuber-App für Linux: VRM-Avatar (VRM 0.x und 1.0) per Drag & Drop laden, mit normaler Webcam steuern.
+<h1 align="center">VTube Linux</h1>
 
-- **Face-Tracking** (MediaPipe Face Landmarker, 52 ARKit-Blendshapes, läuft in einem Web Worker):
-  Kopf, Hals und Oberkörper folgen dem Kopf; Blinzeln inkl. Zwinkern; Augen-/Blickrichtung; Mund (aa/ih/ou/ee/oh).
+<p align="center">
+  VTuber-App für Linux: VRM-Avatar (VRM 0.x und 1.0) per Drag &amp; Drop laden, mit einer normalen Webcam steuern.<br>
+  <sub><i>VTuber app for Linux: load a VRM avatar, drive it with any webcam. User interface in German.</i></sub>
+</p>
+
+<p align="center">
+  <a href="https://github.com/MaxiUwe27/VTUBE/releases/latest"><img alt="Download" src="https://img.shields.io/github/v/release/MaxiUwe27/VTUBE?label=Download&amp;color=0a6cff"></a>
+  <a href="https://github.com/MaxiUwe27/VTUBE/actions/workflows/build.yml"><img alt="Build" src="https://github.com/MaxiUwe27/VTUBE/actions/workflows/build.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="Lizenz: MIT" src="https://img.shields.io/badge/Lizenz-MIT-14c8d8"></a>
+</p>
+
+<p align="center">
+  <img src="docs/images/hero.jpg" width="100%" alt="VTube Linux mit geladenem VRM-Avatar">
+</p>
+
+## Funktionen
+
+- **Face-Tracking** mit jeder Webcam (MediaPipe, 52 ARKit-Blendshapes, Iris-Blick): Kopf, Hals und Oberkörper
+  folgen dem Kopf; Blinzeln inkl. Zwinkern; Blickrichtung; Mund (A/I/U/E/O). Passt sich nach wenigen Sekunden an Ihr Gesicht an.
 - **Automatische Emotionen**: Fröhlich, Wütend, Traurig, Entspannt, Überrascht – aus Ihrer echten Mimik, einzeln regelbar.
 - **Perfect Sync**: Hat das Modell ARKit-Blendshapes, werden diese direkt angesteuert.
 - **Lip-Sync per Mikrofon** zusätzlich zum Kamera-Mund (Mischung einstellbar).
-- **Kalibrierung** auf Ihr neutrales Gesicht (Taste `C`).
-- **Ausgabe**: OBS-Browserquelle (transparent), Chroma-Key-Hintergrund für Fenstererfassung, virtuelle Kamera (v4l2loopback).
-- SpringBones (Haare/Kleidung), Atmung/Idle-Animation, Arme natürlich gesenkt, Auto-Framing (Kopf/Oberkörper/Ganzkörper), Kamera-Orbit um den Avatar (Maus oder Kugel).
+- **Ausgabe**: OBS-Browserquelle (transparent), Chroma-Key-Hintergrund für Fenstererfassung, virtuelle Kamera (v4l2loopback) für Discord, Zoom & Co.
+- **Handy als Kamera** (IP Webcam, DroidCam, VDO.Ninja) über eine Browserquellen-URL.
+- Robuster Umgang mit konvertierten Avataren (z. B. aus VRChat): fehlende VRM-Ausdrücke werden automatisch zugeordnet, mit Diagnose und Test-Reglern.
+- SpringBones (Haare/Kleidung), Atmung/Idle-Animation, Auto-Framing, Kamera-Orbit mit der Maus, helles und dunkles Design.
+- Alles läuft lokal – keine Konten, keine Cloud, nichts wird ins Internet geschickt.
 
-## Installation (AppImage)
+<p align="center">
+  <img src="docs/images/screenshot-light.jpg" width="49%" alt="Helles Design">
+  <img src="docs/images/screenshot-dark.jpg" width="49%" alt="Dunkles Design">
+  <br><sub>Helles und dunkles Design (Umschalten oben rechts im Panel)</sub>
+</p>
 
-AppImage aus dem GitHub-Release bzw. dem Actions-Artifact laden, dann:
-```bash
-chmod +x VTube-Linux-*-x86_64.AppImage
-./VTube-Linux-*-x86_64.AppImage
-```
-Selbst bauen: `npm ci && npm run dist` → `release/VTube-Linux-<version>-x86_64.AppImage` (Details: [docs/BUILD.md](docs/BUILD.md)).
+## Installation
 
-### Weitergeben / andere Distributionen
-Das AppImage läuft auf jedem 64-Bit-Linux; es ist nicht auf einen bestimmten Avatar oder Rechner zugeschnitten.
-Zum Weitergeben einfach die Datei verschicken und [docs/FUER_FREUNDE.md](docs/FUER_FREUNDE.md) mitgeben.
-Ubuntu: `libfuse2` bzw. `libfuse2t64` nötig (oder `--appimage-extract-and-run`); ab Ubuntu 24.04 ggf. `--no-sandbox`
-(AppArmor sperrt die Chromium-Sandbox). Lizenz: MIT ([LICENSE](LICENSE)), Drittanbieter: [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+1. Unter **[Releases](https://github.com/MaxiUwe27/VTUBE/releases/latest)** die Datei `VTube-Linux-<version>-x86_64.AppImage` herunterladen.
+2. Ausführbar machen und starten:
+   ```bash
+   chmod +x VTube-Linux-*-x86_64.AppImage
+   ./VTube-Linux-*-x86_64.AppImage
+   ```
+
+Voraussetzungen: 64-Bit-Linux (x86_64), Webcam, Grafikkarte mit WebGL 2 (jede aktuelle NVIDIA/AMD/Intel).
+Läuft auf Fedora/Nobara, Arch, openSUSE, Debian, Ubuntu usw. – nicht an einen bestimmten Avatar oder Rechner gebunden.
+
+- **Ubuntu:** `libfuse2` (22.04) bzw. `libfuse2t64` (ab 24.04) installieren oder mit `--appimage-extract-and-run` starten.
+  Ab 24.04 sperrt AppArmor die Chromium-Sandbox → mit `--no-sandbox` starten.
+- **Selbst bauen:** `npm ci && npm run dist` → `release/VTube-Linux-<version>-x86_64.AppImage` (Details: [docs/BUILD.md](docs/BUILD.md)).
+- **Kurzanleitung zum Weitergeben:** [docs/KURZANLEITUNG.md](docs/KURZANLEITUNG.md).
 
 ## Erste Schritte
 
@@ -125,7 +152,23 @@ v4l2loopback-Geräte mit Pfad, Name und benutzenden Prozessen und beendet sich s
 
 Einstellungen: `~/.config/VTube Linux/settings.json`.
 
-## Technik
+## Technik & Mitmachen
 
 Electron 38, three.js + [@pixiv/three-vrm](https://github.com/pixiv/three-vrm), [MediaPipe Tasks Vision](https://github.com/google-ai-edge/mediapipe).
-Architektur: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Anforderungen an eigene Avatare (Unity/UniVRM): [docs/AVATAR_ANLEITUNG.md](docs/AVATAR_ANLEITUNG.md).
+
+| Dokument | Inhalt |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Aufbau, Module, Datenfluss |
+| [docs/BUILD.md](docs/BUILD.md) | Bauen, Start-Optionen, Packaging |
+| [docs/AVATAR_ANLEITUNG.md](docs/AVATAR_ANLEITUNG.md) | Anforderungen an eigene Avatare (Unity/UniVRM) |
+| [docs/TODO.md](docs/TODO.md) | Geplante Funktionen und bekannte Einschränkungen |
+
+Fehler oder Wünsche bitte als [Issue](https://github.com/MaxiUwe27/VTUBE/issues) melden – am besten mit Distribution,
+Grafikkarte und der Ausgabe beim Start im Terminal.
+
+## Lizenz
+
+[MIT](LICENSE). Mitgelieferte Drittanbieter-Komponenten (MediaPipe-Modell: Apache-2.0, Schriften Inter und Silkscreen:
+SIL OFL 1.1 u. a.): [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+Avatare auf den Screenshots: oben der Avatar von MaxiUwe27 (nicht Teil des Projekts, Nutzung und Weitergabe nicht erlaubt);
+hell/dunkel „VRM1_Constraint_Twist_Sample“ © 2022 pixiv Inc. (VRM-Lizenz, Nutzung durch alle erlaubt).

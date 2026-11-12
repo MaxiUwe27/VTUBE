@@ -4,6 +4,7 @@ VTuber-App für Linux: VRM-Avatar laden, Webcam steuert Kopf, Augen, Mund und Mi
 Kostenlos, MIT-Lizenz. Alles läuft lokal, nichts wird ins Internet geschickt.
 
 ## Starten
+Download: https://github.com/MaxiUwe27/VTUBE/releases/latest
 ```bash
 chmod +x VTube-Linux-*-x86_64.AppImage
 ./VTube-Linux-*-x86_64.AppImage
