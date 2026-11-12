@@ -469,10 +469,15 @@ export class AvatarRenderer {
       this.schedule();
       return;
     }
-    const dt = this.lastRenderMs ? (now - this.lastRenderMs) / 1000 : 1 / target;
-    // Keep cadence stable: advance by whole intervals rather than drifting.
-    this.lastRenderMs = this.lastRenderMs && now - this.lastRenderMs < interval * 2
-      ? this.lastRenderMs + interval * Math.floor((now - this.lastRenderMs) / interval)
+    // dt = real time since the previous rendered frame. (lastRenderMs is a cadence grid that can lag
+    // up to one interval behind `now`; measuring dt from it made animations/springs run too fast.)
+    const dt = this.lastTickMs ? (now - this.lastTickMs) / 1000 : 1 / target;
+    this.lastTickMs = now;
+    // Keep cadence stable: snap the grid to the interval phase instead of drifting, but never let it
+    // fall behind `now` (a frame that passed via the 1 ms tolerance resets the grid to now).
+    const since = now - this.lastRenderMs;
+    this.lastRenderMs = this.lastRenderMs && since >= interval && since < interval * 2
+      ? now - (since % interval)
       : now;
 
     try {
@@ -867,11 +872,28 @@ export class AvatarRenderer {
 // ------------------------------------------------------------------ helpers
 
 function disposeObject(obj: THREE.Object3D): void {
+  // GLTFLoader decodes textures into ImageBitmaps; three.js' dispose() frees only the GPU copy and
+  // the decoded bitmaps would otherwise linger until a late GC (see ImageBitmapLoader docs).
+  const bitmaps = new Set<ImageBitmap>();
+  obj.traverse((o) => {
+    const mats = (o as THREE.Mesh).material;
+    if (!mats) return;
+    for (const m of Array.isArray(mats) ? mats : [mats]) {
+      // Same places VRMUtils.deepDispose looks: material properties + ShaderMaterial uniforms (MToon).
+      const uniforms = (m as THREE.ShaderMaterial).isShaderMaterial ? (m as THREE.ShaderMaterial).uniforms : null;
+      const values = [...Object.values(m), ...(uniforms ? Object.values(uniforms).map((u) => u?.value) : [])];
+      for (const v of values) {
+        const data = (v as THREE.Texture | null)?.isTexture ? (v as THREE.Texture).source?.data : null;
+        if (typeof ImageBitmap !== 'undefined' && data instanceof ImageBitmap) bitmaps.add(data);
+      }
+    }
+  });
   try {
     VRMUtils.deepDispose(obj);
   } catch {
     /* ignore */
   }
+  for (const b of bitmaps) b.close();
 }
 
 /** Deep copy of plain JSON data (structuredClone needs Chromium 98+; OBS ships older CEF builds). */
