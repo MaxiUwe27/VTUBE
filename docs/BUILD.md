@@ -23,6 +23,7 @@ Icon neu erzeugen: `npm run icon` (`scripts/make-icon.mjs` → `build/icon.png`)
 GitHub Actions (`.github/workflows/build.yml`) baut bei jedem Push ein AppImage (Artifact, 3 Tage aufbewahrt).
 **Release:** `version` in `package.json` erhöhen, committen, Tag setzen und pushen
 (`git tag v0.2.0 && git push origin v0.2.0`) – der Workflow hängt das AppImage an ein neues GitHub-Release.
+Ohne Tag-Push: *Actions → Build AppImage → Run workflow*, Branch `main`, Feld „Release-Tag“ z. B. `v0.2.0`.
 
 ## Start-Optionen
 | Option | Wirkung |
